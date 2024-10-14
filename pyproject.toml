@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "DsoAcademicSoftware"
+version = "0.1.2"
+#dynamic = ["version",]
+authors = [
+  { name="Demitris Anastasiou", email="danastasiou@mail.ntua.gr" },
+  { name="Xanthos Papanikolaou", email="xanthos@mail.ntua.gr" },
+  { name="Vangelis Zacharis", email="vanzach@mail.ntua.gr" },
+]
+description = "."
+readme = "README.md"
+requires-python = ">=3"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+  'numpy',
+  'scipy',
+  'basemap', 
+  'basemap-data-hires'
+]
+
+[project.urls]
+Repository = "https://github.com/DSOlab/AcademicSoftware"
+
+[project.scripts]
+dso_groundtrack = "bin.groundtrack:main"
+dso_skyplot     = "bin.skyplot:main"
+
+# Specify the packages/modules
+[tool.hatch.build]
+include = ["dsoclasses/", "bin/"]
+
+[tool.hatch.build.targets.sdist]
+include = ["dsoclasses/", "bin/"]
+
+[tool.hatch.build.targets.wheel]
+include = ["dsoclasses/", "bin/"]
