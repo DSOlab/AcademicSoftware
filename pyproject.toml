@@ -32,6 +32,7 @@ Repository = "https://github.com/DSOlab/AcademicSoftware"
 [project.scripts]
 dso_groundtrack = "bin.groundtrack:main"
 dso_skyplot     = "bin.skyplot:main"
+dso_orbit3d     = "bin.orbit3d:main"
 
 # Specify the packages/modules
 [tool.hatch.build]
