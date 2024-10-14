@@ -42,6 +42,7 @@ def main():
 
     t=[];
     a=[]; e=[]; i=[]; raan=[]; omega=[]; u=[]; h=[]; T=[];
+    dr_coc = []; dv_coc=[]; dr_ioi = []; dv_ioi=[];
     for k,v in data.items():
 # we are only plotting one day of orbit
         if (k-sp3.t_start).total_seconds() <= 86400e0:
@@ -65,6 +66,15 @@ def main():
             h.append(d['specific angular momentum'] * 1e-6) ## to km^2
             T.append(d['period'] / 3600e0 ) ## to hours
 
+# statistics of conversion
+            r2, v2 = elements.elements2state(d)
+            dr_coc.append(r2 - reci)
+            dv_coc.append(v2 - veci)
+            recef2 = R.inv().as_matrix() @ r2
+            vecef2 = R.inv().as_matrix() @ v2 - np.cross(np.array([0, 0, 7.292115e-5]), r2)
+            dr_ioi.append(recef2-recef)
+            dv_ioi.append(vecef2-vecef)
+
     fig, axs = plt.subplots(4, 2)
     axs[0, 0].plot(t, i);    axs[0, 0].set_title(r"Inclination $i$ [$\degree$]");
     axs[1, 0].plot(t, raan); axs[1, 0].set_title(r"RAAN $\Omega$ [$\degree$]");
@@ -75,6 +85,17 @@ def main():
     axs[2, 1].plot(t, h);    axs[2, 1].set_title(r"Specific Angular Momentum $h$ [$km^2/s$]");
     axs[3, 1].plot(t, T);    axs[3, 1].set_title(r"Period $T$ [hours]");
     fig.tight_layout()
+    plt.show()
+
+    fig, axs = plt.subplots(2)
+    fig.suptitle('ECI -> Elements -> ECI [m]')
+    axs[0].scatter(t, [x[0] for x in dr_coc], alpha=.3, edgecolors='none', label=r"$\delta X$")
+    axs[0].scatter(t, [x[1] for x in dr_coc], alpha=.3, edgecolors='none', label=r"$\delta Y$")
+    axs[0].scatter(t, [x[2] for x in dr_coc], alpha=.3, edgecolors='none', label=r"$\delta Z$")
+    axs[1].scatter(t, [x[0] for x in dv_coc], alpha=.3, edgecolors='none', label=r"$\delta v_{x}$")
+    axs[1].scatter(t, [x[1] for x in dv_coc], alpha=.3, edgecolors='none', label=r"$\delta v_{y}$")
+    axs[1].scatter(t, [x[2] for x in dv_coc], alpha=.3, edgecolors='none', label=r"$\delta v_{z}$")
+    plt.legend()
     plt.show()
 
 if __name__ == "__main__":
