@@ -78,12 +78,9 @@ class Coe:
         self.inc   = dct['inclination']
 
     def semimajor(self):
-        print("\th={:.1f}".format(self.h))
-        print("\te={:.1f}".format(self.e))
         return self.h*self.h / self.mu / (1. - self.e*self.e)
 
     def period(self):
-        print("{:}, {:}, {:}".format(np.sqrt(self.mu), self.semimajor(),self.semimajor()**(3./2.)))
         return 2.*np.pi / np.sqrt(self.mu) * self.semimajor()**(3./2.)
 
 def elements2state(elements_dict, mu=398600.435507):
