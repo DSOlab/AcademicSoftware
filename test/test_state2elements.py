@@ -6,9 +6,9 @@ import math
 from dsoclasses.orbits import elements
 
 # example
-r = np.array([-6045e3, -3490e3, 2500e3])   # [m]
-v = np.array([-3.457e3, 6.618e3, 2.533e3]) # [m/s]
-# in [m], [m^2] ...
+r = np.array([-6045., -3490., 2500.])   # [km]
+v = np.array([-3.457, 6.618, 2.533]) # [km/s]
+
 refres = {'specific angular momentum': 58310e6,
             'inclination': math.radians(153.2e0),
             'Omega': math.radians(255.3e0),
@@ -22,14 +22,30 @@ refres = {'specific angular momentum': 58310e6,
 
 res = elements.state2elements(r, v)
 print("Equatorial cartesian to Elements:")
-for k,d in res.items():
-    print('{:20s} diff: {:+.2f}'.format(k, d-refres[k]))
+print("Angular momentum (kmˆ2/s) = {:.1f}".format(res['specific angular momentum']))
+print("Eccentricity              = {:.6f}".format(res['eccentricity']))
+print("Right ascension (deg)     = {:.3f}".format(np.degrees(res['Omega'])))
+print("Inclination (deg)         = {:.3f}".format(np.degrees(res['inclination'])))
+print("Argument of perigee (deg) = {:.4f}".format(np.degrees(res['omega'])))
+print("True anomaly (deg)        = {:.4f}".format(np.degrees(res['true anomaly'])))
+print("Semimajor axis (km)       = {:.1f}".format(res['semimajor']))
+r2, v2 = elements.elements2state(res)
+print("r (km)   = ({:.1f} {:.1f} {:.1f})".format(r2[0], r2[1], r2[2]))
+print("v (km/s) = ({:.4f} {:.4f} {:.4f})".format(v2[0], v2[1], v2[2]))
 
-re, ve = elements.elements2state(res)
-print("Elements to cartesian:")
-print("dx  = {:.0f} ({:.0f}-{:.0f}) m".format(    re[0]-r[0], re[0], r[0]))
-print("dy  = {:.0f} ({:.0f}-{:.0f}) m".format(    re[1]-r[1], re[1], r[1]))
-print("dz  = {:.0f} ({:.0f}-{:.0f}) m".format(    re[2]-r[2], re[2], r[2]))
-print("dvx = {:.3f} ({:.3f}-{:.3f}) m/sec".format(ve[0]-v[0], ve[0], v[0]))
-print("dvy = {:.3f} ({:.3f}-{:.3f}) m/sec".format(ve[1]-v[1], ve[1], v[1]))
-print("dvz = {:.3f} ({:.3f}-{:.3f}) m/sec".format(ve[2]-v[2], ve[2], v[2]))
+r2, v2 = elements.elements2state({'specific angular momentum': 80000, 
+    'eccentricity': 1.4, 
+    'Omega': np.radians(40.), 
+    'inclination': np.radians(30.), 
+    'omega': np.radians(60.), 
+    'true anomaly': np.radians(30.)})
+print("r (km)   = ({:.1f} {:.1f} {:.1f})".format(r2[0], r2[1], r2[2]))
+print("v (km/s) = ({:.4f} {:.4f} {:.4f})".format(v2[0], v2[1], v2[2]))
+res = elements.state2elements(r2, v2)
+print("Angular momentum (kmˆ2/s) = {:.1f}".format(res['specific angular momentum']))
+print("Eccentricity              = {:.6f}".format(res['eccentricity']))
+print("Right ascension (deg)     = {:.3f}".format(np.degrees(res['Omega'])))
+print("Inclination (deg)         = {:.3f}".format(np.degrees(res['inclination'])))
+print("Argument of perigee (deg) = {:.4f}".format(np.degrees(res['omega'])))
+print("True anomaly (deg)        = {:.4f}".format(np.degrees(res['true anomaly'])))
+print("Semimajor axis (km)       = {:.1f}".format(res['semimajor']))

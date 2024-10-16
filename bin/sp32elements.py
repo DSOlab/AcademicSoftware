@@ -25,20 +25,26 @@ parser.add_argument("--sat-id",
     default = None,
     help='Satellite id. Will be used to extract its position from the given sp3 file, hence, the id should match the id referenced therein. If not give, the first satellite encountered in the sp3 file will be used.')
 
-def main():
+def main() -> int:
 
+    #try:
     args = parser.parse_args()
 
     if not os.path.isfile(args.sp3):
-        print('Error. Failed to locate sp3 file {:}'.format(args.sp3))
-        sys.exit(1)
+        print('Error. Failed to locate sp3 file {:}'.format(args.sp3), file=sys.stderr)
+        return 1
 
 # create an Sp3 instance,
     sp3 = sp3c.Sp3(args.sp3)
+# make sure the sp3 has both position and velocity
+    if sp3.pos_vel != 'V':
+        print('Sp3 file {:} is marked as \'P\', i.e. does not contain velocity estimates. Giving up!'.format(sp3.fn))
+        return 2
+
 # set the id of the satellite we need, 
     satid = args.satid if args.satid is not None else sp3.sat_ids[0]
 # and extract its data
-    data = sp3.get_satellite(satid, True)
+    data = sp3.get_satellite(satid, False)
 
     t=[];
     a=[]; e=[]; i=[]; raan=[]; omega=[]; u=[]; h=[]; T=[];
@@ -54,17 +60,21 @@ def main():
             reci =  R.as_matrix() @ recef
             veci =  R.as_matrix() @ vecef +\
                     np.cross(np.array([0, 0, 7.292115e-5]), recef)
+            reci=recef
+            veci=vecef
 # cartesian (equatorial) to elements
             d = elements.state2elements(reci, veci)
+
 # store elements to plot
-            a.append(d['semimajor'] * 1e-6)
+            a.append(elements.Coe(d).semimajor())
             e.append(d['eccentricity'])
             i.append(np.degrees(d['inclination']))
             raan.append(np.degrees(d['Omega']))
             omega.append(np.degrees(d['omega']))
             u.append(np.degrees(d['true anomaly']))
-            h.append(d['specific angular momentum'] * 1e-6) ## to km^2
-            T.append(d['period'] / 3600e0 ) ## to hours
+            h.append(d['specific angular momentum'])
+            T.append(elements.Coe(d).period() / 3600e0 ) ## to hours
+            print("T={:.1f} or {:.1f}".format(elements.Coe(d).period(), elements.Coe(d).period() / 3600e0))
 
 # statistics of conversion
             r2, v2 = elements.elements2state(d)
@@ -87,16 +97,20 @@ def main():
     fig.tight_layout()
     plt.show()
 
-    fig, axs = plt.subplots(2)
-    fig.suptitle('ECI -> Elements -> ECI [m]')
-    axs[0].scatter(t, [x[0] for x in dr_coc], alpha=.3, edgecolors='none', label=r"$\delta X$")
-    axs[0].scatter(t, [x[1] for x in dr_coc], alpha=.3, edgecolors='none', label=r"$\delta Y$")
-    axs[0].scatter(t, [x[2] for x in dr_coc], alpha=.3, edgecolors='none', label=r"$\delta Z$")
-    axs[1].scatter(t, [x[0] for x in dv_coc], alpha=.3, edgecolors='none', label=r"$\delta v_{x}$")
-    axs[1].scatter(t, [x[1] for x in dv_coc], alpha=.3, edgecolors='none', label=r"$\delta v_{y}$")
-    axs[1].scatter(t, [x[2] for x in dv_coc], alpha=.3, edgecolors='none', label=r"$\delta v_{z}$")
-    plt.legend()
-    plt.show()
+    #fig, axs = plt.subplots(2)
+    #fig.suptitle('ECI -> Elements -> ECI [m]')
+    #axs[0].scatter(t, [x[0] for x in dr_coc], alpha=.3, edgecolors='none', label=r"$\delta X$")
+    #axs[0].scatter(t, [x[1] for x in dr_coc], alpha=.3, edgecolors='none', label=r"$\delta Y$")
+    #axs[0].scatter(t, [x[2] for x in dr_coc], alpha=.3, edgecolors='none', label=r"$\delta Z$")
+    #axs[1].scatter(t, [x[0] for x in dv_coc], alpha=.3, edgecolors='none', label=r"$\delta v_{x}$")
+    #axs[1].scatter(t, [x[1] for x in dv_coc], alpha=.3, edgecolors='none', label=r"$\delta v_{y}$")
+    #axs[1].scatter(t, [x[2] for x in dv_coc], alpha=.3, edgecolors='none', label=r"$\delta v_{z}$")
+    #plt.legend()
+    #plt.show()
+
+    #except Exception as err:
+    #    print("Error. Exception caught:", err)
+    #    return 100
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
