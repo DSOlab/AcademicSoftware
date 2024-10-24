@@ -4,15 +4,15 @@ from datetime import datetime
 class Sp3:
 
     def get_satellite(self, satid, toSI=True):
-        """ Extract position and velocity (if present) info from an Sp3 
+        """ Extract position and velocity (if present) info from an Sp3
             instance.
-            
+
             The function can only extract infor for one satellite. For more
-            satellites, the function needs to be called again (one time for 
+            satellites, the function needs to be called again (one time for
             each satellite).
 
-            The info are returned as a dictionary, where the keys are the 
-            time stampes (i.e. epochs) and the values are dictionaries of 
+            The info are returned as a dictionary, where the keys are the
+            time stampes (i.e. epochs) and the values are dictionaries of
             info collected. E.g.
 
         """
@@ -33,7 +33,7 @@ class Sp3:
                     raise RuntimeError
                 t = datetime.strptime(line[3:29], "%Y %m %d %H %M %S.%f")
                 epoch_entries = {}
-# keep on reading lines that can be 'P', 'V'. there can also be corellation 
+# keep on reading lines that can be 'P', 'V'. there can also be corellation
 # lines, starting eith 'E[PV]' but these are just skipped
                 line = fin.readline()
                 while line[0] in ['P', 'V', 'E']:
@@ -43,17 +43,26 @@ class Sp3:
                         if csatid == satid:
                             pscale = 1e3 if toSI == True else 1e0
                             cscale = 1e6 if toSI == True else 1e0
-                            x, y, z, clk = [float(x) for x in line[4:62].split()]
+                            # *****************************************************************************************
+                            # try:
+                            print(line[4:62].split())
+                            x, y, z, clk = [float(x) for x in line[4:61].split()]
+
                             epoch_entries['x'] = x*pscale; # default is km
                             epoch_entries['y'] = y*pscale; # default is km
                             epoch_entries['z'] = z*pscale; # default is km
                             epoch_entries['c'] = clk*cscale; # default is microsec
                             if len(line) > 61:
-                                xsdev, ysdev, zsdev, csdev = [int(x) for x in line[61:74].split()]
-                                epoch_entries['xsdev'] = xsdev; # 
-                                epoch_entries['ysdev'] = ysdev; # 
-                                epoch_entries['zsdev'] = zsdev; # 
-                                epoch_entries['csdev'] = csdev; # 
+                            # ***********************************************************************************************************
+                                try:
+                                    xsdev, ysdev, zsdev, csdev = [int(x) for x in line[61:74].split()]
+                                except:
+                                    xsdev = ysdev = zsdev = csdev = 0.
+                            # *************************************************************************************************************
+                                epoch_entries['xsdev'] = xsdev; #
+                                epoch_entries['ysdev'] = ysdev; #
+                                epoch_entries['zsdev'] = zsdev; #
+                                epoch_entries['csdev'] = csdev; #
                             if len(line) > 74:
                                 events = (line[74]+line[75]+line[78]+line[79]).strip()
                                 epoch_entries['events'] = events # string
@@ -71,10 +80,10 @@ class Sp3:
                             epoch_entries['cr'] = clk_rate*cscale; # 10**-4 microsec/sec
                             if len(line)>61:
                                 xvsdev, yvsdev, zvsdev, crsdev = [int(x) for x in line[61:74].split()]
-                                epoch_entries['xvsdev'] = xvsdev; # 
-                                epoch_entries['yvsdev'] = yvsdev; # 
-                                epoch_entries['zvsdev'] = zvsdev; # 
-                                epoch_entries['crsdev'] = crsdev; # 
+                                epoch_entries['xvsdev'] = xvsdev; #
+                                epoch_entries['yvsdev'] = yvsdev; #
+                                epoch_entries['zvsdev'] = zvsdev; #
+                                epoch_entries['crsdev'] = crsdev; #
 # if the line starts with a 'E' it could be EOF
                     elif line.startswith('EOF'): break
                     else:
@@ -100,14 +109,14 @@ class Sp3:
             self.crd_system = line[46:52].strip()
             self.orb_type   = line[52:56].strip()
             self.agency     = line[56:].strip()
-            
+
 # line #2 (ignore)
             line = fin.readline()
-            
-# lines #[3, 7], all start with '+ ' and contain satellites included in the 
+
+# lines #[3, 7], all start with '+ ' and contain satellites included in the
 # Sp3-c.
 # Note that since sp3-d, the lines starting with '+ ' can be more than five.
-# So here, we are going to read as many lines as are needed, i.e. all lines 
+# So here, we are going to read as many lines as are needed, i.e. all lines
 # starting with '+ ', but they should be more than five.
             self.sat_ids = []
             num_lines_sat_id = 0
@@ -121,14 +130,14 @@ class Sp3:
             if num_lines_sat_id < 5:
                 print('ERROR Expected a minimum of five lines to start with \'+ \' but found {:}'.format(num_lines_sat_id))
                 raise RuntimeError
-                
-# lines #[8, 12], all start with '++' and contain accuracies, for satellites 
+
+# lines #[8, 12], all start with '++' and contain accuracies, for satellites
 # included in the sp3-c.
 # Note that since sp3-d:
 # a. this block can start at a later line than 8,
 # b. this block can have nore than five lines, however the number of lines
 #    should exactly match the num_lines_sat_ids
-# The first line to examine (already buffered), should be the first line of 
+# The first line to examine (already buffered), should be the first line of
 # this block.
             self.sat_acc = []
             for j in range(0, num_lines_sat_id-1):
@@ -146,7 +155,7 @@ class Sp3:
 
 # line #14 has no interesting info. For sp3-d, this can be a latter line
             line = fin.readline()
-            
+
 # line #15 has base values for accuracies. For sp3-d, this can be a latter line
             line = fin.readline()
             self.base_posvel = float(line[3:14])
@@ -154,12 +163,12 @@ class Sp3:
 
 # lines #[16, 22] are skiped, no info.
             for j in range(16, 23): line = fin.readline()
-# if we are reading an sp3d file, there may be more comment lines. Keep reading 
+# if we are reading an sp3d file, there may be more comment lines. Keep reading
 # until we mee the first line that does not start with '/*'
-# Store the current position whithin the file, so we can later skip the 
+# Store the current position whithin the file, so we can later skip the
 # header easily
             self.end_of_head = fin.tell()
-            while line.startswith('/*'): 
+            while line.startswith('/*'):
                 self.end_of_head = fin.tell()
                 line = fin.readline()
 
