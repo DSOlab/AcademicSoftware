@@ -1,19 +1,29 @@
 import sys
 from datetime import datetime
 
+""" Sp3 class and utilities.
+
+    Should work with Sp3[cd] (single- or multi-satellite) files.
+
+    References:
+    [1]. S. Hilla, The Extended Standard Product 3 Orbit Format (SP3-d), 
+         National Geodetic Survey, February 2016, available at: 
+         https://files.igs.org/pub/data/format/sp3d.pdf
+"""
+
 class Sp3:
 
     def get_satellite(self, satid, toSI=True):
         """ Extract position and velocity (if present) info from an Sp3
             instance.
 
-            The function can only extract infor for one satellite. For more
+            The function can only extract info for one satellite. For more
             satellites, the function needs to be called again (one time for
             each satellite).
 
             The info are returned as a dictionary, where the keys are the
             time stampes (i.e. epochs) and the values are dictionaries of
-            info collected. E.g.
+            info collected.
 
         """
 
@@ -43,26 +53,27 @@ class Sp3:
                         if csatid == satid:
                             pscale = 1e3 if toSI == True else 1e0
                             cscale = 1e6 if toSI == True else 1e0
-                            # *****************************************************************************************
-                            # try:
-                            print(line[4:62].split())
-                            x, y, z, clk = [float(x) for x in line[4:61].split()]
-
+# x-, y-, z- coordinates must be there, given in km
+                            x, y, z = [float(x) for x in line[4:46].split()]
+# assign values to dictionary (for current epoch)
                             epoch_entries['x'] = x*pscale; # default is km
                             epoch_entries['y'] = y*pscale; # default is km
                             epoch_entries['z'] = z*pscale; # default is km
-                            epoch_entries['c'] = clk*cscale; # default is microsec
+# clck value may also be present, in microsec
+                            if len(line) > 47:
+                                clk = float(line[46:60].strip())
+                                epoch_entries['c'] = clk*cscale; # default is microsec
+# x-, y- and z- sdev value may also be present
                             if len(line) > 61:
-                            # ***********************************************************************************************************
-                                try:
-                                    xsdev, ysdev, zsdev, csdev = [int(x) for x in line[61:74].split()]
-                                except:
-                                    xsdev = ysdev = zsdev = csdev = 0.
-                            # *************************************************************************************************************
+                                xsdev, ysdev, zsdev = [int(x) for x in line[61:69].split()]
                                 epoch_entries['xsdev'] = xsdev; #
                                 epoch_entries['ysdev'] = ysdev; #
                                 epoch_entries['zsdev'] = zsdev; #
+# clk-sdev may also be present
+                            if len(line) > 71:
+                                csdev = int(line[70:73].strip())
                                 epoch_entries['csdev'] = csdev; #
+# Event flags
                             if len(line) > 74:
                                 events = (line[74]+line[75]+line[78]+line[79]).strip()
                                 epoch_entries['events'] = events # string
