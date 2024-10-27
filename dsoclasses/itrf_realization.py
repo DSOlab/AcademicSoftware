@@ -18,6 +18,16 @@ class ItrfSiteMotion:
                 raise RuntimeError
             dt = (t-self.t0).days / 365.25
             return self.x0 + dt * self.vx
+
+    class HarmonicTerm:
+        def __init__(self, samp, camp, freq, t0):
+            self.samp = samp
+            self.camp = camp
+            self.freq = freq
+            self.t0 = t0
+        def value(self, t):
+            omegat = 2 * np.pi * self.freq * (t-self.t0).days / 365.25
+            return self.samp * np.sin(omegat) + self.camp * np.cos(omegat)
     
     class PsdTerm:
         def __init__(self, amp, tau, terq, logexp):
@@ -68,6 +78,7 @@ class ItrfSiteMotion:
     def at(self, t):
         x = 0e0; y = 0e0; z = 0e0;
         de = 0e0; dn = 0e0; du = 0e0;
+# Linear terms (x, y, z)
         for xl in self.xlt:
             try: x += xl.value(t)
             except: pass
@@ -77,17 +88,56 @@ class ItrfSiteMotion:
         for zl in self.zlt:
             try: z += zl.value(t)
             except: pass
+# make sure we have found a suitable interval for the linear terms
         if x == .0 or y == .0 or z == .0:
             print("ERROR. Failed to find suitable interval for linear term at {:}".format(t))
             raise RuntimeError
+# add harmonic terms
+        for xh in self.xhrm:
+            x += xh.value(t)
+        for yh in self.yhrm:
+            y += yh.value(t)
+        for zh in self.zhrm:
+            z += zh.value(t)
+# PSD displacement (e, n, u)
         for ep in self.epsd:
             de += ep.value(t)
         for np in self.npsd:
             dn += np.value(t)
         for up in self.upsd:
             du += up.value(t)
+# PSD displacement in (x, y, z)
         dcar = self.enu2xyz(x, y, z, de, dn, du)
         return x + dcar[0], y + dcar[1], z + dcar[2]
+
+    def get_harmonics_terms(self, estimates):
+        xhrm_terms = []
+        yhrm_terms = []
+        zhrm_terms = []
+        site = self.site
+        for ctype in ['X', 'Y', 'X']:
+            a1sin = None; a1cos = None; t1 = None; f1=1.;
+            a2sin = None; a2cos = None; t2 = None; f2=2.;
+            for estimate in estimates:
+                if estimate['parameter_type'] == 'A1SIN' + ctype:
+                    a1sin = estimate['value']
+                    t1 = estimate['epoch']
+                elif estimate['parameter_type'] == 'A1COS' + ctype:
+                    a1cos = estimate['value']
+                    t1 = estimate['epoch']
+                elif estimate['parameter_type'] == 'A2SIN' + ctype:
+                    a2sin = estimate['value']
+                    t2 = estimate['epoch']
+                elif estimate['parameter_type'] == 'A2COS' + ctype:
+                    a2cos = estimate['value']
+                    t2 = estimate['epoch']
+            temp_list = []
+            if a1sin is not None: temp_list.append(self.HarmonicTerm(a1sin, a1cos, f1, t1))
+            if a2sin is not None: temp_list.append(self.HarmonicTerm(a2sin, a2cos, f2, t2))
+            if   ctype == 'X': xhrm_terms+=temp_list
+            elif ctype == 'Y': yhrm_terms+=temp_list
+            else             : zhrm_terms+=temp_list
+        return xhrm_terms, yhrm_terms, zhrm_terms
     
     def get_psd_terms(self, estimates):
         epsd_terms = []
@@ -135,6 +185,7 @@ class ItrfSiteMotion:
         return xterms, yterms, zterms
 
     def __init__(self, site, *args):
+        self.site = site
 # collect here all (individual) estimates, from all SINEX files
         all_estimates = []
         for fn in args:
@@ -145,8 +196,10 @@ class ItrfSiteMotion:
                 print("No entries for site {:} in SINEX file {:}".format(site, fn))
             else:
 # collect (all) estimates in SINEX for the site
+                print("Note: Parsing SINEX file {:} for estimates of site {:}".format(snx.filename, self.site))
                 all_estimates += snx.solution_estimate([site], True)
 # given estimates, construct LinearTerm's for X-, Y- and Z- components
         self.xlt, self.ylt, self.zlt = self.get_linear_terms(all_estimates)
         self.epsd, self.npsd, self.upsd = self.get_psd_terms(all_estimates)
+        self.xhrm, self.yhrm, self.zhrm = self.get_harmonics_terms(all_estimates)
         self.allow_extrapolation_in_linear_terms()
