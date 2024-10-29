@@ -11,5 +11,6 @@ rnx = GnssRinex(sys.argv[1])
 for block in rnx:
     try:
         print(block.satellite('C02'))
+        b = filter_satellite_system('gps')
     except:
         pass 

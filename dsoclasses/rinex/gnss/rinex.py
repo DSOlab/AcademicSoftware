@@ -1,5 +1,16 @@
 import datetime
 import math
+import sys
+
+def sysstr2sysid(sat_sys):
+    if   sat_sys.strip().lower() in ['gps', 'g']: return 'G'
+    elif sat_sys.strip().lower() in ['glonass', 'glo', 'r']: return 'R'
+    elif sat_sys.strip().lower() in ['galileo', 'gal', 'e']: return 'E'
+    elif sat_sys.strip().lower() in ['beidou', 'c']: return 'C'
+    elif sat_sys.strip().lower() in ['qzss', 'j']: return 'J'
+    else:
+        print("Error. Unknown satellite system string: {:}".format(sat_sys), file=sys.stderr)
+        raise RuntimeError
 
 class GnssRinex:
     
@@ -43,10 +54,10 @@ class GnssRinex:
                 elif line[60:].strip() == "SYS / # / OBS TYPES":
                     system = line[0]
                     numobsc = int(line[3:7])
-                    l = line[7:60].split()
+                    l = line[7:60].strip().split()
                     while len(l) < numobsc:
                         line = fin.readline()
-                        l += line[7:60].split()
+                        l += line[7:60].strip().split()
                     self.obscodes[system] = l
                 elif line[60:].strip() == "TIME OF FIRST OBS":
                     self.time_first_obs = self.resolve_date(line[0:44])
@@ -58,6 +69,8 @@ class GnssRinex:
                     pass
                 line = fin.readline()
 
+    def approx_cartesian(self): return [xapprox, yapprox, zapprox]
+
     class DataBlock: 
 
         def __init__(self, dct):
@@ -67,6 +80,16 @@ class GnssRinex:
         def flag(self): return self.dct['flag']
         def nsats(self): return self.dct['num_sats']
         def satellite(self, satid): return self.dct[satid]
+        def filter_satellite_system(self, sat_sys, include_block_info=True):
+            if include_block_info:
+                new_dct = {'epoch': self.dct['epoch'], 'flag': self.dct['flag'], 'num_sats': 0}
+            else:
+                new_dct = {}
+            for k,v in self.dct.items():
+                if k[0] == sysstr2sysid(k[0]):
+                    new_dct[k] = v
+                    new_dct['num_sats'] += 1
+            return DataBlock(new_dct)
     
     def __init__(self, fn):
         self.filename = fn
@@ -86,7 +109,7 @@ class GnssRinex:
         data_block = {}
         data_block['epoch'] = self.resolve_date(line[1:29])
         data_block['flag'] = int(line[29:32])
-        data_block['num_sats'] = int(line[32:])
+        data_block['num_sats'] = int(line[32:35])
         for i in range(data_block['num_sats']):
             line = self.stream.readline()
             satid = line[0:3]
