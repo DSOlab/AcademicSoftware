@@ -9,8 +9,11 @@ rnx = GnssRinex(sys.argv[1])
 # next(rit)
 
 for block in rnx:
-    try:
-        print(block.satellite('C02'))
-        b = filter_satellite_system('gps')
-    except:
-        pass 
+    #try:
+    # print(block.satellite('C02'))
+    # b = block.filter_satellite_system('gps')
+    # print(b.satellite('G02'))
+    for k,v in block.filter_satellite_system('glonass'):
+        print(k,v)
+    #except:
+    #    pass 

@@ -6,8 +6,10 @@ def sysstr2sysid(sat_sys):
     if   sat_sys.strip().lower() in ['gps', 'g']: return 'G'
     elif sat_sys.strip().lower() in ['glonass', 'glo', 'r']: return 'R'
     elif sat_sys.strip().lower() in ['galileo', 'gal', 'e']: return 'E'
-    elif sat_sys.strip().lower() in ['beidou', 'c']: return 'C'
+    elif sat_sys.strip().lower() in ['beidou', 'bds', 'c']: return 'C'
     elif sat_sys.strip().lower() in ['qzss', 'j']: return 'J'
+    elif sat_sys.strip().lower() in ['irnss', 'navic/irnss', 'i']: return 'I'
+    elif sat_sys.strip().lower() in ['sbas', 's']: return 'S'
     else:
         print("Error. Unknown satellite system string: {:}".format(sat_sys), file=sys.stderr)
         raise RuntimeError
@@ -86,10 +88,13 @@ class GnssRinex:
             else:
                 new_dct = {}
             for k,v in self.dct.items():
-                if k[0] == sysstr2sysid(k[0]):
-                    new_dct[k] = v
-                    new_dct['num_sats'] += 1
-            return DataBlock(new_dct)
+                if k not in ['epoch', 'flag', 'num_sats']:
+                    if sysstr2sysid(sat_sys) == sysstr2sysid(k[0]):
+                        new_dct[k] = v
+                        new_dct['num_sats'] += 1
+            return GnssRinex.DataBlock(new_dct)
+        def __iter__(self): 
+            return ((key, value) for key, value in self.dct.items() if key not in ['epoch', 'flag', 'num_sats'])
     
     def __init__(self, fn):
         self.filename = fn

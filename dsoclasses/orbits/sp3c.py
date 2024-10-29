@@ -107,6 +107,53 @@ class Sp3:
                 data[t] = epoch_entries
             return data
 
+    def get_system_pos(self, satsys, toSI=True):
+        """ 
+            statsys: list of satellite systems to consider, as given in Sp3 
+                     and RINEX. E.g.: satsys = ['G'], or satsys = ['G', 'R']
+            TODO no handling of event flags
+        """
+        data = {}
+        pscale = 1e3 if toSI == True else 1e0
+        cscale = 1e6 if toSI == True else 1e0
+        with open(self.fn, 'r') as fin:
+            fin.seek(self.end_of_head)
+            line = fin.readline()
+            while line:
+# should be a header line or a line marking the end of the file (i.e. EOF)
+                if line.startswith('EOF'): break
+                if not line.startswith('*  '):
+                    print('Error. Expected header line, found: {:}'.format(line.strip()))
+                    raise RuntimeError
+                t = datetime.strptime(line[3:29], "%Y %m %d %H %M %S.%f")
+                data[t] = {}
+# keep on reading lines that can be 'P', 'V'. there can also be corellation
+# lines, starting eith 'E[PV]' but these are just skipped
+                line = fin.readline()
+                while line[0] in ['P', 'V', 'E']:
+                    if line[0] == 'P':
+# parse position and clock info
+                        csatid = line[1:4]
+                        if csatid[0].lower() in satsys:
+# x-, y-, z- coordinates must be there, given in km
+                            x, y, z = [pscale*float(x) for x in line[4:46].split()]
+# clck value may also be present, in microsec
+                            if len(line) > 47:
+                                clk = cscale*float(line[46:60].strip())
+                            else:
+                                clk = None
+                            data[t][csatid] = [x,y,z,clk]
+# if the line starts with a 'E' it could be EOF
+                    elif line.startswith('EOF'): break
+                    else:
+# neither position nor velocity line, read next
+                        pass
+# read next line
+                    line = fin.readline()
+# we are through with this block; store the values collected, using the epoch
+# as key
+                data[t] = epoch_entries
+            return data
 
     # Create an Sp3 instance from a filename
     def __init__(self, fn):

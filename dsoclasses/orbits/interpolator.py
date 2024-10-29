@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.interpolate import CubicSpline, PchipInterpolator
 from dsoclasses.time.calmjd import cal2fmjd
+from dsoclasses.orbits.sp3c import Sp3
 
 class OrbitInterpolator:
 
@@ -64,18 +65,10 @@ class OrbitInterpolator:
             self.xspl, self.yspl, self.zspl = self.create_interpolators(start, stop)
             self.last_start, self.last_stop = start, stop
         return self.xspl(mjd), self.yspl(mjd), self.zspl(mjd)
-        
-        #elif self.type == 'CubicSpline': 
-        #    if start != self.last_start or stop != last_stop:
-        #        self.xspl = CubicSpline(self.t[start:stop], self.x[start:stop])
-        #        self.yspl = CubicSpline(self.t[start:stop], self.y[start:stop])
-        #        self.zspl = CubicSpline(self.t[start:stop], self.z[start:stop])
-        #        self.last_start, self.last_stop = start, stop
-        #elif self.type == 'CubicSpline': 
-        #    if start != self.last_start or stop != last_stop:
-        #        self.xspl = CubicSpline(self.t[start:stop], self.x[start:stop])
-        #        self.yspl = CubicSpline(self.t[start:stop], self.y[start:stop])
-        #        self.zspl = CubicSpline(self.t[start:stop], self.z[start:stop])
-        #        self.last_start, self.last_stop = start, stop
-        #    x, y, z = self.xspl(mjd), self.yspl(mjd), self.zspl(mjd)
-        #return x,y,z
+
+class Sp3Interpolator:
+    
+    def __init__(self, sp3fn, sat_systems):
+        sp3 = Sp3(sp3fn)
+        data = sp3.get_system_pos(sat_systems, True)
+
