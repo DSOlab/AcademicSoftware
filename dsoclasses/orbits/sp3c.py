@@ -113,6 +113,7 @@ class Sp3:
                      and RINEX. E.g.: satsys = ['G'], or satsys = ['G', 'R']
             TODO no handling of event flags
         """
+        satsys = [ s.lower() for s in satsys ]
         data = {}
         pscale = 1e3 if toSI == True else 1e0
         cscale = 1e6 if toSI == True else 1e0
@@ -152,7 +153,6 @@ class Sp3:
                     line = fin.readline()
 # we are through with this block; store the values collected, using the epoch
 # as key
-                data[t] = epoch_entries
             return data
 
     # Create an Sp3 instance from a filename
@@ -209,7 +209,7 @@ class Sp3:
 
 # line #13 -- we only case about the time system. For sp3-d, this can be a
 # latter line
-            self.time_sys = fin.readline()[9:13]
+            self.time_sys = fin.readline()[9:13].strip()
 
 # line #14 has no interesting info. For sp3-d, this can be a latter line
             line = fin.readline()

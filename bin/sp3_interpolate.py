@@ -11,6 +11,9 @@ from dsoclasses.orbits import sp3c, interpolator
 from dsoclasses.geodesy import transformations
 from dsoclasses.time import gast
 
+## TODO: add clock interpolation (as cmd option)
+##
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--sp3", 
     metavar='SP3_FILE',
@@ -57,13 +60,15 @@ def main() -> int:
         t = sp3.t_start
         while t <= (sp3.t_start + datetime.timedelta(hours=24)):
             try:
-                xc,yc,zc = intrp.at(t)
+                xc, yc, zc = intrp.at(t)
                 ti.append(t)
                 xi.append(xc); yi.append(yc); zi.append(zc);
             except:
                 print("Warning. Failed interpolating at {:}".format(t), file=sys.stderr)
             t += datetime.timedelta(seconds=5)
-        if len(ti) < 2: return
+        if len(ti) < 2: 
+            print("Error. Too few orbital states to plot!", file=sys.stderr)
+            return
 
 # get the sp3 data for plotting
         sx=[]; sy=[]; sz=[]; st=[];

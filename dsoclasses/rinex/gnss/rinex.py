@@ -63,7 +63,7 @@ class GnssRinex:
                     self.obscodes[system] = l
                 elif line[60:].strip() == "TIME OF FIRST OBS":
                     self.time_first_obs = self.resolve_date(line[0:44])
-                    self.time_first_obs_sys = line[44:60].strip()
+                    self.time_sys = line[44:60].strip()
                 elif line[60:].strip() == "TIME OF LAST OBS":
                     self.time_last_obs = self.resolve_date(line[0:44])
                     self.time_last_obs_sys = line[44:60].strip()
@@ -71,7 +71,7 @@ class GnssRinex:
                     pass
                 line = fin.readline()
 
-    def approx_cartesian(self): return [xapprox, yapprox, zapprox]
+    def approx_cartesian(self): return [self.xapprox, self.yapprox, self.zapprox]
 
     class DataBlock: 
 
@@ -91,7 +91,7 @@ class GnssRinex:
                 if k not in ['epoch', 'flag', 'num_sats']:
                     if sysstr2sysid(sat_sys) == sysstr2sysid(k[0]):
                         new_dct[k] = v
-                        new_dct['num_sats'] += 1
+                        if include_block_info: new_dct['num_sats'] += 1
             return GnssRinex.DataBlock(new_dct)
         def __iter__(self): 
             return ((key, value) for key, value in self.dct.items() if key not in ['epoch', 'flag', 'num_sats'])

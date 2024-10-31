@@ -5,70 +5,108 @@ from dsoclasses.orbits.sp3c import Sp3
 
 class OrbitInterpolator:
 
-    def __init__(self, satid, dct, interval_in_sec=1800, min_data_pts=4, itype='Polynomial'):
+    def __init__(self, satid, dct, interval_in_sec=1800, min_data_pts=4, itype='Polynomial', include_clock=False, owns_t=True):
         self.satellite = satid
         self.type = itype
         self.dsec = interval_in_sec
         self.minpts = min_data_pts
+        self.has_clock = include_clock
 # sort dictionary in chronological order
         din = dict(sorted(dct.items()))
 # get time and position in individual arrays
-        self.x=[];self.y=[];self.z=[];self.t=[];
-        for k, v in din.items():
-            self.t.append(cal2fmjd(k))
-            self.x.append(v['x']); self.y.append(v['y']); self.z.append(v['z']);
-            if len(self.t) >= 2: assert self.t[-1] > self.t[-2]
+        if owns_t:
+            self.x=[];self.y=[];self.z=[];self.t=[];self.c=[];
+            for k, v in din.items():
+                self.t.append(cal2fmjd(k))
+                self.x.append(v['x']); self.y.append(v['y']); self.z.append(v['z']);self.c.append(v['c']);
+                if len(self.t) >= 2: assert self.t[-1] > self.t[-2]
+        else: # this is probably a call from Sp3Interpolator
+            self.x=[];self.y=[];self.z=[];self.c=[];
+            for k, v in din.items():
+                try:
+                    x, y, z, c = v[satid]
+                    self.x.append(x); self.y.append(y); self.z.append(z);self.c.append(c);
+                except:
+                    print("Error. Failed finding satellite{:} for epoch {:}".format(satid, k))
 # prepare interpolators if needed
         if itype != 'Polynomial':
-            self.last_start = 0
-            self.last_stop = min_data_pts
-            self.xspl, self.yspl, self.zspl = self.create_interpolators(0, min_data_pts)
+            self.last_start = -1
+            self.last_stop  = -1
+            #if owns_t:
+            #    self.xspl, self.yspl, self.zspl = self.create_interpolators(0, min_data_pts)
 
-    def create_interpolators(self, start, stop):
+    def create_interpolators(self, start, stop, tarray=None):
+        if not tarray: tarray = self.t
         if self.type == 'CubicSpline':
-            xspl = CubicSpline(self.t[start:stop], self.x[start:stop])
-            yspl = CubicSpline(self.t[start:stop], self.y[start:stop])
-            zspl = CubicSpline(self.t[start:stop], self.z[start:stop])
-        elif self.type == 'PchipInterpolator':
-            xspl = PchipInterpolator(self.t[start:stop], self.x[start:stop])
-            yspl = PchipInterpolator(self.t[start:stop], self.y[start:stop])
-            zspl = PchipInterpolator(self.t[start:stop], self.z[start:stop])
+            xspl = CubicSpline(tarray[start:stop], self.x[start:stop])
+            yspl = CubicSpline(tarray[start:stop], self.y[start:stop])
+            zspl = CubicSpline(tarray[start:stop], self.z[start:stop])
+            if self.has_clock: cspl = CubicSpline(tarray[start:stop], self.c[start:stop])
+        elif tarrayype == 'PchipInterpolator':
+            xspl = PchipInterpolator(tarray[start:stop], self.x[start:stop])
+            yspl = PchipInterpolator(tarray[start:stop], self.y[start:stop])
+            zspl = PchipInterpolator(tarray[start:stop], self.z[start:stop])
+            if self.has_clock: cspl = PchipInterpolator(tarray[start:stop], self.c[start:stop])
+        if self.has_clock: return xspl, yspl, zspl, cspl
         return xspl, yspl, zspl
 
-    def find_interval(self, t):
+    def find_interval(self, t, tarray=None):
+        if not tarray: tarray = self.t
         mjd = cal2fmjd(t)
         start = None
         stop = None
-        for idx, mjdi in enumerate(self.t):
+        for idx, mjdi in enumerate(tarray):
             if (mjd-mjdi)*86400. <= self.dsec:
                 start = idx
                 break
-        for idx, mjdi in enumerate(self.t[start:]):
+        for idx, mjdi in enumerate(tarray[start:]):
             if (mjdi-mjd)*86400. > self.dsec:
                 stop = start + idx
                 break
         return start, stop
 
-    def at(self, t):
-        start, stop = self.find_interval(t)
+    def at(self, t, tarray=None):
+        start, stop = self.find_interval(t, tarray)
         if start is None or stop is None or stop-start<self.minpts:
             # print("Warning cannot interpolate at date {:}".format(t))
             raise RuntimeError
         mjd = cal2fmjd(t)
         if self.type == 'Polynomial':
-            x = np.interp(mjd, self.t[start:stop], self.x[start:stop])
-            y = np.interp(mjd, self.t[start:stop], self.y[start:stop])
-            z = np.interp(mjd, self.t[start:stop], self.z[start:stop])
-            return x,y,z
+            x = np.interp(mjd, tarray[start:stop], self.x[start:stop])
+            y = np.interp(mjd, tarray[start:stop], self.y[start:stop])
+            z = np.interp(mjd, tarray[start:stop], self.z[start:stop])
+            if not self.has_clock: return x,y,z
+            c = np.interp(mjd, tarray[start:stop], self.c[start:stop])
+            return x,y,z,c
         
-        if start != self.last_start or stop != last_stop:
-            self.xspl, self.yspl, self.zspl = self.create_interpolators(start, stop)
+        if start != self.last_start or stop != self.last_stop:
             self.last_start, self.last_stop = start, stop
+            if not self.has_clock: 
+                self.xspl, self.yspl, self.zspl = self.create_interpolators(start, stop, tarray)
+                # print("Debug. no clocks used ...")
+            else: 
+                self.xspl, self.yspl, self.zspl, self.cspl = self.create_interpolators(start, stop, tarray)
+        if self.has_clock: return self.xspl(mjd), self.yspl(mjd), self.zspl(mjd), self.cspl(mjd)
         return self.xspl(mjd), self.yspl(mjd), self.zspl(mjd)
 
 class Sp3Interpolator:
-    
-    def __init__(self, sp3fn, sat_systems):
-        sp3 = Sp3(sp3fn)
-        data = sp3.get_system_pos(sat_systems, True)
 
+    def __init__(self, sp3fn, sat_systems, interval_in_sec=1800, min_data_pts=4, itype='Polynomial'):
+        sp3 = Sp3(sp3fn)
+        self.time_sys = sp3.time_sys
+        data = sp3.get_system_pos(sat_systems, True)
+# get the date arrayi, both in mjd an python datetime
+        self.tpyd = []
+        self.tmjd = []
+        for k in data: 
+            self.tmjd.append(cal2fmjd(k))
+            self.tpyd.append(k)
+            if len(self.tmjd) >= 2: assert self.tmjd[-1] > self.tmjd[-2]
+# for each satellite, create an OrbitInterpolator instance
+        self.interpolators = {}
+        for sat in sp3.sat_ids:
+            if sat[0].lower() in [s.lower() for s in sat_systems]:
+                self.interpolators[sat] = OrbitInterpolator(sat, data, interval_in_sec, min_data_pts, itype, True, False)
+
+    def sat_at(self, satid, t):
+        return self.interpolators[satid].at(t, self.tmjd)

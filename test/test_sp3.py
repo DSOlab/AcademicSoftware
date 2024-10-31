@@ -1,6 +1,6 @@
 #! /usr/bin/python
 
-from dsoclasses import sp3c
+from dsoclasses.orbits import sp3c
 
 if __name__ == "__main__":
     # validate using a DORIS sp3c file, with only one satellite
