@@ -3,9 +3,16 @@ from scipy.interpolate import CubicSpline, PchipInterpolator
 from dsoclasses.time.calmjd import cal2fmjd
 from dsoclasses.orbits.sp3c import Sp3
 
+def flag_is_on(flag_str, flag_list):
+    flag_list = [f.lower() for f in flag_list]
+    for f in flag_str.strip():
+        if f.lower() in flag_list:
+            return True
+    return False
+
 class OrbitInterpolator:
 
-    def __init__(self, satid, dct, interval_in_sec=1800, min_data_pts=4, itype='Polynomial', include_clock=False, owns_t=True):
+    def __init__(self, satid, dct, interval_in_sec=1800, min_data_pts=4, itype='Polynomial', include_clock=False, owns_t=True, exclude_missing_clock_values=False, exclude_flag_events=[]):
         self.satellite = satid
         self.type = itype
         self.dsec = interval_in_sec
@@ -24,16 +31,20 @@ class OrbitInterpolator:
             self.x=[];self.y=[];self.z=[];self.c=[];
             for k, v in din.items():
                 try:
-                    x, y, z, c = v[satid]
-                    self.x.append(x); self.y.append(y); self.z.append(z);self.c.append(c);
+                    x, y, z, c, f = v[satid]
+                    if (not exclude_missing_clock_values) or (exclude_missing_clock_values==True and not np.isnan(c)):
+                        if f=='' or exclude_flag_vents==[] or not flag_is_on(f, exclude_flag_events):
+                            self.x.append(x); self.y.append(y); self.z.append(z);self.c.append(c);
+                        else:
+                            print("Skipping sp3 record for satellite {:}: event flag is {:}".format(satid, f))
+                    else:
+                        print("Skipping sp3 record for satellite {:}: missing clock value ([{:}])".format(satid, c))
                 except:
                     print("Error. Failed finding satellite{:} for epoch {:}".format(satid, k))
 # prepare interpolators if needed
         if itype != 'Polynomial':
             self.last_start = -1
             self.last_stop  = -1
-            #if owns_t:
-            #    self.xspl, self.yspl, self.zspl = self.create_interpolators(0, min_data_pts)
 
     def create_interpolators(self, start, stop, tarray=None):
         if not tarray: tarray = self.t
@@ -91,7 +102,7 @@ class OrbitInterpolator:
 
 class Sp3Interpolator:
 
-    def __init__(self, sp3fn, sat_systems, interval_in_sec=1800, min_data_pts=4, itype='Polynomial'):
+    def __init__(self, sp3fn, sat_systems, interval_in_sec=1800, min_data_pts=4, itype='Polynomial', exclude_missing_clock_values=False, exclude_flag_events=[]):
         sp3 = Sp3(sp3fn)
         self.time_sys = sp3.time_sys
         data = sp3.get_system_pos(sat_systems, True)
@@ -106,7 +117,7 @@ class Sp3Interpolator:
         self.interpolators = {}
         for sat in sp3.sat_ids:
             if sat[0].lower() in [s.lower() for s in sat_systems]:
-                self.interpolators[sat] = OrbitInterpolator(sat, data, interval_in_sec, min_data_pts, itype, True, False)
+                self.interpolators[sat] = OrbitInterpolator(sat, data, interval_in_sec, min_data_pts, itype, True, False, exclude_missing_clock_values, exclude_flag_events)
 
     def sat_at(self, satid, t):
         return self.interpolators[satid].at(t, self.tmjd)

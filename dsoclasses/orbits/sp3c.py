@@ -1,5 +1,6 @@
 import sys
 from datetime import datetime
+import numpy as np
 
 """ Sp3 class and utilities.
 
@@ -52,7 +53,7 @@ class Sp3:
                         csatid = line[1:4]
                         if csatid == satid:
                             pscale = 1e3 if toSI == True else 1e0
-                            cscale = 1e6 if toSI == True else 1e0
+                            cscale = 1e-6 if toSI == True else 1e0
 # x-, y-, z- coordinates must be there, given in km
                             x, y, z = [float(x) for x in line[4:46].split()]
 # assign values to dictionary (for current epoch)
@@ -116,7 +117,7 @@ class Sp3:
         satsys = [ s.lower() for s in satsys ]
         data = {}
         pscale = 1e3 if toSI == True else 1e0
-        cscale = 1e6 if toSI == True else 1e0
+        cscale = 1e-6 if toSI == True else 1e0
         with open(self.fn, 'r') as fin:
             fin.seek(self.end_of_head)
             line = fin.readline()
@@ -140,10 +141,19 @@ class Sp3:
                             x, y, z = [pscale*float(x) for x in line[4:46].split()]
 # clck value may also be present, in microsec
                             if len(line) > 47:
-                                clk = cscale*float(line[46:60].strip())
+                                clk = float(line[46:60].strip())
+                                if clk >= 999999.9:
+                                    clk = np.nan
+                                else:
+                                    clk *= cscale
                             else:
-                                clk = None
-                            data[t][csatid] = [x,y,z,clk]
+                                clk = np.nan
+# Event flag(s)
+                            if len(line) >= 74:
+                                flag = line[73:].strip()
+                            else:
+                                flag = ''
+                            data[t][csatid] = [x,y,z,clk,flag]
 # if the line starts with a 'E' it could be EOF
                     elif line.startswith('EOF'): break
                     else:

@@ -30,6 +30,18 @@ parser.add_argument("--sat-sys",
     required=False,
     default = 'G',
     help='Satellite system(s) to be used for the Point Processing.')
+parser.add_argument("--cut-off-angle", 
+    metavar='CUTOFF_ANGLE',
+    dest='cutoff',
+    required=False,
+    default = 10.,
+    help='Cut-off angle to use in [deg].')
+parser.add_argument("--exclude-sats", 
+    metavar='EXCLUDE_SATS',
+    dest='sat_exclude',
+    required=False,
+    default = [],
+    help='Satellites to be excluded from the analysis; they should be passed in as recorded in the RINEX file, using a whitespace sperated list (e.g. \'--exclude-sats G13 R21 E09\'.')
 parser.add_argument("--interpolation", 
     metavar='INTERP_ALGORITHM',
     dest='interp_type',
@@ -50,6 +62,32 @@ def fetch(dct, *args):
         if arg in dct:
             return dct[arg]
     return None
+
+def infoplot(xaxis, yaxis, dct, title='', satlist=[]):
+    fig, ax = plt.subplots()
+    available_sats = []
+    for t, sats in dct.items():
+        for sat in sats:
+            if sat['sat'] not in available_sats:
+                available_sats.append(sat['sat'])
+    for plot_sat in available_sats:
+        x=[]; y=[];
+        if satlist == [] or (plot_sat in satlist):
+            for t, tobs in dct.items():
+                for sat in tobs:
+                    if sat['sat'] == plot_sat:
+                        if xaxis == 't': 
+                            x.append(t)
+                        else:
+                            x.append(sat[xaxis])
+                        y.append(sat[yaxis])
+        ax.scatter(x, y, label=plot_sat)
+    ax.legend()
+    ax.grid(True)
+    plt.title(title)
+    plt.xlabel(xaxis)
+    plt.ylabel(yaxis)
+    plt.show()
 
 def pseudorange(rrec, rsat):
     """ Computes:
@@ -83,7 +121,7 @@ def main() -> int:
             return 1
 
 # construct an Interpolator
-        intrp = interpolator.Sp3Interpolator(args.sp3, [args.satsys], 1800, 4, args.interp_type)
+        intrp = interpolator.Sp3Interpolator(args.sp3, [args.satsys], 1800, 4, args.interp_type, True, ['M', 'E'])
 
 # Construct a RINEX instance to extract observations from
         rnx = GnssRinex(args.rnx)
@@ -98,9 +136,11 @@ def main() -> int:
         R = Rt.transpose()
 
 # LS matrices and info
-        l = []; J = []; w = []; x0 = site_xyz + [0.]
+        dl = []; J = []; w = []; x0 = site_xyz + [0.]
         num_obs = 0; num_obs_used = 0;
+        rawobs = {}
         sats_used = []
+        residuals = {}
 
 # Loop throufh data block, and compute observations
         for block in rnx:
@@ -108,46 +148,104 @@ def main() -> int:
                 t = block.t()
 # consider only GPS satellite, loop through each GPS satellite
                 for sat, obs in block.filter_satellite_system("gps", False):
-                    num_obs += 1
-                    p1 = fetch(obs, 'C1P', 'C1L', 'C1C')
-                    p2 = fetch(obs, 'C2L', 'C2W')
+                    if sat not in args.sat_exclude:
+                        num_obs += 1
+                        p1 = fetch(obs, 'C1P', 'C1L', 'C1C')
+                        p2 = fetch(obs, 'C2L', 'C2W')
 # get satellite position in ITRF
-                    try:
-                        x,y,z,clk = intrp.sat_at(sat, t)
-                    except:
-                        x = None
-                    if p1 is not None and p2 is not None and x is not None:
-                        p1 = p1['value']
-                        p2 = p2['value']
-                        p3 = (gs.GPS_L1_FREQ * gs.GPS_L1_FREQ * p1 - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ * p2) / (gs.GPS_L1_FREQ*gs.GPS_L1_FREQ - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ)
+                        try:
+                            x,y,z,clk = intrp.sat_at(sat, t)
+                        except:
+                            x = None
+                        if p1 is not None and p2 is not None and x is not None:
+                            p1 = p1['value']
+                            p2 = p2['value']
+                            p3 = (gs.GPS_L1_FREQ * gs.GPS_L1_FREQ * p1 - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ * p2) / (gs.GPS_L1_FREQ*gs.GPS_L1_FREQ - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ)
 # compute azimouth and elevation
-                        az, el = azele(np.array(site_xyz), np.array((x,y,z)), R)
-                        if el > np.radians(10):
-                            num_obs_used += 1
+                            az, el = azele(np.array(site_xyz), np.array((x,y,z)), R)
+                            if el > np.radians(args.cutoff):
 # make L3 linear combination
-                            r, drdx, drdy, drdz = pseudorange(np.array(site_xyz), np.array((x,y,z)))
-                            l.append(p3 - gs.C * clk - r + gs.C * x0[3])
-                            J.append([drdx, drdy, drdz, 1e0])
-                            w.append(1. / np.cos(el))
+                                r, drdx, drdy, drdz = pseudorange(np.array(site_xyz), np.array((x,y,z)))
+                                p3res = p3 + gs.C * clk - r - x0[3]
+                                if abs(p3res) < 8e3:
+                                    num_obs_used += 1
+                                    dl.append(p3 + gs.C * clk - (r + x0[3]))
+                                    J.append([drdx, drdy, drdz, 1e0])
+                                    w.append(1. / np.cos(el))
+                                    
+                                    if t not in rawobs: rawobs[t] = []
+                                    rawobs[t].append({'sat':sat, 'xyzsat': np.array((x,y,z)), 'p3': p3, 'el': np.degrees(el), 'clksat': clk, 'mark': 'used', 'res': dl[-1]})
 # add some info
-                            if not sat in sats_used: sats_used.append(sat)
-                    else:
-                        print("Failed to find observable for sat {:} at {:}".format(sat, t))
-            #except:
-            #    pass
+                                    if not sat in sats_used: sats_used.append(sat)
+                                else:
+                                    print("Residual too high! Observation skipped, sat={:}@{:}, res={:}km".format(sat, t, p3res*1e-3))
+                        else:
+                            # print("Failed to find observable for sat {:} at {:}".format(sat, t))
+                            pass
+                #except:
+                #    pass
 
-# Least Squares solution
-        J = np.array(J); l = np.array(l);
-        print(J.shape)
-        print(np.diag(w).shape)
-        print(l.shape)
-        dx = np.linalg.inv(J.transpose() @ np.diag(w) @ J) @ J.transpose() @ np.diag(w) @ l
-        print(dx)
+# Plots
+        infoplot('t', 'res', rawobs, 'Raw Observation Residuals', [])
+        infoplot('el', 'res', rawobs, 'Raw Observation Residuals', [])
+        print("Used {:} out of {:} observations ~{:.1f}%".format(num_obs_used, num_obs, num_obs_used * 100. / num_obs))
 
-# List of satellites used in the analysis
-        print("Satellites used: #{:} ->".format(len(sats_used)), end='')
-        for s in sats_used: print("{:} ".format(s), end='')
-        print()
+# iterative Least Squares solution
+        x0 = np.array(x0)
+        for i in range(0,5):
+            J  = np.array(J)
+            dl = np.array(dl)
+# var-covar matrix
+            Q = np.linalg.inv(J.transpose() @ np.diag(w) @ J)
+# estimate corrections
+            dx = Q @ J.transpose() @ np.diag(w) @ dl
+# compute new estimates
+            x0 = x0 + dx
+            lat, lon, hgt = transformations.car2ell(x0[0], x0[1], x0[2])
+            Rt = transformations.geodetic2lvlh(lat, lon)
+            R = Rt.transpose()
+# compute residuals
+            resi = []
+            for t,v in rawobs.items():
+                for satobs in v:
+                    if satobs['mark'] == 'used':
+                        xyzrec = np.array((x0[0], x0[1], x0[2]))
+                        r, _, _, _ = pseudorange(xyzrec, satobs['xyzsat'])
+                        res = satobs['p3'] + gs.C * satobs['clksat'] - (r + x0[3])
+                        resi.append(res)
+                        satobs['res'] = res
+# variance of unit weight
+            numobsi = dl.shape[0]
+            numpars = 4
+            u = np.array((resi))
+            sigma = np.sqrt(u @ np.diag(w) @ u.transpose() / (numobsi - numpars))
+            print("LS iteration {:}".format(i))
+            print("Num of observations: {:}".format(numobsi))
+            print("Sigma0 = {:}".format(np.sqrt(sigma)))
+
+# remove observations with large residuals and prepare matrices for new iteration
+            J = []; dl = []; w = [];
+            obs_flagged = 0;
+            for t,v in rawobs.items():
+                for satobs in v:
+                    if satobs['mark'] == 'used':
+                        xyzrec = np.array((x0[0], x0[1], x0[2]))
+                        r, drdx, drdy, drdz = pseudorange(xyzrec, satobs['xyzsat'])
+                        az, el = azele(xyzrec, satobs['xyzsat'], R)
+                        satobs['el'] = el
+                        if (abs(satobs['res']) <= 3e0 * sigma) or (i<2):
+                            dl.append(satobs['res'])
+                            J.append([drdx, drdy, drdz, 1e0])
+                            w.append(1. / np.cos(satobs['el']))
+                        else:
+                            satobs['mark'] = 'outlier'
+                            obs_flagged += 1
+            print("Observations marked: {:}".format(obs_flagged))
+# plot residuals for this iteration
+            print(dx)
+            infoplot('t', 'res', rawobs,  'Observation Residuals iteration {:}'.format(i+1), [])
+            infoplot('el', 'res', rawobs, 'Observation Residuals iteration {:}'.format(i+1), [])
+
 
     #except Exception as err:
     #    print("Error. Exception caught:", err)
