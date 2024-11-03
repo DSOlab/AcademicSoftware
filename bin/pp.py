@@ -63,7 +63,7 @@ def fetch(dct, *args):
             return dct[arg]
     return None
 
-def infoplot(xaxis, yaxis, dct, title='', satlist=[]):
+def infoplot(xaxis, yaxis, dct, title='', satlist=[], use_marked=False):
     fig, ax = plt.subplots()
     available_sats = []
     for t, sats in dct.items():
@@ -75,7 +75,7 @@ def infoplot(xaxis, yaxis, dct, title='', satlist=[]):
         if satlist == [] or (plot_sat in satlist):
             for t, tobs in dct.items():
                 for sat in tobs:
-                    if sat['sat'] == plot_sat:
+                    if sat['sat'] == plot_sat and (sat['mark'] == 'used' or use_marked == True):
                         if xaxis == 't': 
                             x.append(t)
                         else:
@@ -110,6 +110,8 @@ def azele(rrec, rsat, R):
     az = np.arctan2(enu[0], enu[1])
     el = np.arcsin(enu[2] / r)
     return az, el
+
+weight = lambda el: np.cos(el)
 
 def main() -> int:
 
@@ -171,7 +173,8 @@ def main() -> int:
                                     num_obs_used += 1
                                     dl.append(p3 + gs.C * clk - (r + x0[3]))
                                     J.append([drdx, drdy, drdz, 1e0])
-                                    w.append(1. / np.cos(el))
+                                    # w.append(1. / np.cos(el))
+                                    w.append(weight(el))
                                     
                                     if t not in rawobs: rawobs[t] = []
                                     rawobs[t].append({'sat':sat, 'xyzsat': np.array((x,y,z)), 'p3': p3, 'el': np.degrees(el), 'clksat': clk, 'mark': 'used', 'res': dl[-1]})
@@ -192,7 +195,7 @@ def main() -> int:
 
 # iterative Least Squares solution
         x0 = np.array(x0)
-        for i in range(0,5):
+        for i in range(0,4):
             J  = np.array(J)
             dl = np.array(dl)
 # var-covar matrix
@@ -236,7 +239,8 @@ def main() -> int:
                         if (abs(satobs['res']) <= 3e0 * sigma) or (i<2):
                             dl.append(satobs['res'])
                             J.append([drdx, drdy, drdz, 1e0])
-                            w.append(1. / np.cos(satobs['el']))
+                            # w.append(1. / np.cos(satobs['el']))
+                            w.append(weight(satobs['el']))
                         else:
                             satobs['mark'] = 'outlier'
                             obs_flagged += 1
