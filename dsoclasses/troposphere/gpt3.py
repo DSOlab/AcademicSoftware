@@ -1,4 +1,12 @@
 import numpy as np
+import datetime
+
+# mean gravity in m/s**2
+gm = 9.80665e0
+# molar mass of dry air in kg/mol
+dMtr = 28.965e-3
+# universal gas constant in J/K/mol
+Rg = 8.3143e0
 
 def saastamoinen_zhd(lat, h, p):
     """ Input parameters:
@@ -11,8 +19,100 @@ def saastamoinen_zhd(lat, h, p):
     h *= 1e-3 
     return 22768e-7 * p / (1. - 266e-5 * np.cos(2.*lat) - 28e-5*h)
 
-def saastamoinen_zwd():
-    pass
+def askne_zwd(e, Tm, wvlr):
+    """ Input parameters:
+        e:    water vapor pressure in hPa 
+        Tm:   mean temperature in Kelvin
+        wvlr: water vapor lapse rate
+        Returns:
+        ZWD in [m]
+    """
+    k1  = 77.604
+    k2 = 64.79
+    k2p = k2 - k1*18.0152/28.9644
+    k3  = 377600.
+
+    # specific gas constant for dry consituents
+    Rd = R/dMtr
+    return 1e-6*(k2p + k3/Tm)*Rd/(wvlr + 1.)/gm*e
+
+def gmf(mjd, lat, lon):
+    doy = mjd  - 44239. + 1. - 28
+    nmax = 9
+    mmax = 9
+    x = np.cos(dlat)*DCOS(dlon)
+    y = np.cos(dlat)*np.sin(dlon)
+    z = np.sin(dlat)
+    V = np.zeros(10,10)
+    W = np.zeros(10,10)
+    V[0,0] = 1.
+    W[0,0] = 0.
+    V[1,0] = z * V[0,0]
+    W[1,0] = 0.
+    for n in range(2, nmax + 1):
+        V[n + 1, 0] = ((2 * n - 1) * z * V[n, 0] - (n - 1) * V[n - 1, 0]) / n
+        W[n + 1, 0] = 0.0
+    for m in range(1, nmax + 1):
+        V[m + 1, m + 1] = (2 * m - 1) * (x * V[m, m] - y * W[m, m])
+        W[m + 1, m + 1] = (2 * m - 1) * (x * W[m, m] + y * V[m, m])
+        if m < nmax:
+            V[m + 2, m + 1] = (2 * m + 1) * z * V[m + 1, m + 1]
+            W[m + 2, m + 1] = (2 * m + 1) * z * W[m + 1, m + 1]
+        for n in range(m + 2, nmax + 1):
+            V[n + 1, m + 1] = ((2 * n - 1) * z * V[n, m + 1] - (n + m - 1) * V[n - 1, m + 1]) / (n - m)
+            W[n + 1, m + 1] = ((2 * n - 1) * z * W[n, m + 1] - (n + m - 1) * W[n - 1, m + 1]) / (n - m)
+    bh = 0.0029
+    c0h = 0.062
+    if (lat < 0):
+        phh  = np.pi
+        c11h = 0.007
+        c10h = 0.002
+    else:
+        phh  = 0
+        c11h = 0.005
+        c10h = 0.001
+    ch = c0h + ((np.cos(doy/365.25*2*np.pi + phh)+1.)*c11h/2. + c10h)*(1-np.cos(dlat))
+    ahm = 0.0
+    aha = 0.0
+    i = 0
+    for n in range(nmax + 1):
+        for m in range(n + 1):
+            ahm += (ah_mean[i] * V[n + 1][m + 1] + bh_mean[i] * W[n + 1][m + 1])
+            aha += (ah_amp[i] * V[n + 1][m + 1] + bh_amp[i] * W[n + 1][m + 1])
+            i += 1
+    ah  = (ahm + aha*np.cos(doy/365.25*2.*np.pi))*1e-5
+    sine   = np.sin(np.pi/2 - zd)
+    cose   = np.cos(np.pi/2 - zd)
+    beta   = bh/(sine + ch  )
+    gamma  = ah/(sine + beta)
+    topcon = (1. + ah/(1. + bh/(1. + ch)))
+    gmfh   = topcon/(sine+gamma)
+    a_ht = 2.53e-5
+    b_ht = 5.49e-3
+    c_ht = 1.14e-3
+    hs_km  = dhgt/1000.
+    beta   = b_ht/(sine + c_ht )
+    gamma  = a_ht/(sine + beta)
+    topcon = (1. + a_ht/(1. + b_ht/(1. + c_ht)))
+    ht_corr_coef = 1/sine - topcon/(sine + gamma)
+    ht_corr      = ht_corr_coef * hs_km
+    gmfh         = gmfh + ht_corr
+    bw = 0.00146
+    cw = 0.04391
+    awm = 0.0
+    awa = 0.0
+    i = 0
+    for n in range(nmax + 1):
+        for m in range(n + 1):
+            awm += (aw_mean[i] * V[n + 1][m + 1] + bw_mean[i] * W[n + 1][m + 1])
+            awa += (aw_amp[i] * V[n + 1][m + 1] + bw_amp[i] * W[n + 1][m + 1])
+            i += 1
+    aw =  (awm + awa*np.cos(doy/365.25*2*np.pi))*1e-5
+    beta   = bw/(sine + cw )
+    gamma  = aw/(sine + beta)
+    topcon = (1. + aw/(1. + bw/(1. + cw)))
+    gmfw   = topcon/(sine+gamma)
+    return gmfh, gmfw
 
 def parse_gpt3_line(line):
     data_keys = ['lat', 'lon', 'p:', 'T:', 'Q:', 'dT:', 'undu', 'Hs', 'a_h:', 'a_w:', 'lambda:', 'Tm:', 'Gn_h:', 'Ge_h:', 'Gn_w:', 'Ge_w:']
@@ -22,27 +122,75 @@ def parse_gpt3_line(line):
     dct = {}
     for key in data_keys:
         if key.endswith(':'):
+            scale = 1.
+            if key[0:-1] in ['Q', 'dT', 'a_h', 'a_w']:
+                scale = 1e-3
+            elif key[0:-1] in ['Gn_h', 'Ge_h', 'Gn_w', 'Ge_w']:
+                scale = 1e-6
             dct[key[0:-1]] = {}
             for kf in key_coeffs:
-                dct[key[0:-1]][kf] = data[idx]
+                dct[key[0:-1]][kf] = data[idx] * scale
                 idx += 1
         else:
             dct[key] = data[idx]
             idx += 1
     return dct
 
-def interpolate(doy, lon, lat, hgt, tld, trd, bld, brd):
+def bilinear_interpolation(doy, lat, lon, hgt, tld, trd, bld, brd):
     cfy = np.cos(doy/365.25*2*np.pi)   # coefficient for A1
     chy = np.cos(doy/365.25*4*np.pi)   # coefficient for B1
     sfy = np.sin(doy/365.25*2*np.pi)   # coefficient for A2
     shy = np.sin(doy/365.25*4*np.pi)   # coefficient for B2
 # transforming ellipsoidal height to orthometric height
     hgt = [ hgt - d['undu'] for d in [tld, trd, bld, brd] ]
-# pressure, temperature at the height of the grid
-    fun = lambda dct, arg: dct[arg]['a0'] + dct[arg]['A1'] * cfy + dct[arg]['B1'] * sfy + dct[arg]['A2'] * chy + dct[arg]['B2'] * cfy
+    fun = lambda dct, arg: dct[arg]['a0'] + dct[arg]['A1'] * cfy + dct[arg]['B1'] * sfy + dct[arg]['A2'] * chy + dct[arg]['B2'] * shy
+# temperature at the height of the grid
     T0 = [ fun(d,'T') for d in [tld, trd, bld, brd] ]
+# pressure at the height of the grid
+    p0 = [ fun(d,'p') for d in [tld, trd, bld, brd] ]
+# humidity
+    Ql = [ fun(d,'Q') for d in [tld, trd, bld, brd] ]
+# reduction = stationheight - gridheight
+    redh = [ h - d['Hs'] for (h,d) in zip(hgt,[tld, trd, bld, brd]) ]
+# lapse rate of the temperature in degree / m
+    dTl = [ fun(d,'dT') for d in [tld, trd, bld, brd] ]
+# temperature reduction to station height
+    Tl = [ t0 + dtl*redh_ - 273.15 for (t0,dtl,redh_) in zip(T0,dTl,redh) ]
+# virtual temperature
+    Tv = [ t0*(1+0.6077 * ql) for (t0,ql) in zip(T0,Ql) ]
+    c =  [ gm*dMtr/(Rg*tv) for tv in Tv ]
+# pressure in hPa
+    pl = [ (p_*np.exp(-c_*redh_))/100. for (p_, c_, redh_) in zip(p0,c,redh) ]
+# hydrostatic coefficient ah
+    ahl = [ fun(d,'a_h') for d in [tld, trd, bld, brd] ]
+# wet coefficient aw
+    awl = [ fun(d,'a_w') for d in [tld, trd, bld, brd] ]
+# water vapor decrease factor la
+    lal = [ fun(d,'lambda') for d in [tld, trd, bld, brd] ]
+# mean temperature of the water vapor Tm
+    Tml = [ fun(d,'Tm') for d in [tld, trd, bld, brd] ]
+# water vapor pressure in hPa 
+    e0 = [ql*p_/(0.622+0.378*ql)/100. for (ql,p_) in zip(Ql,p0) ]
+    el = [e_*(100.*pl_/p_)**(lal_+1.) for (e_,pl_,p_,lal_) in zip(e0,pl,p0,lal)]
+# gradients
+    Gn_hl = [ fun(d,'Gn_h') for d in [tld, trd, bld, brd] ]
+    Ge_hl = [ fun(d,'Ge_h') for d in [tld, trd, bld, brd] ]
+    Gn_wl = [ fun(d,'Gn_w') for d in [tld, trd, bld, brd] ]
+    Ge_wl = [ fun(d,'Ge_w') for d in [tld, trd, bld, brd] ]
+# interpolate
+    y2 = tld['lat']
+    y1 = bld['lat']
+    y  = np.degrees(lat)
+    x2 = trd['lon']
+    x1 = tld['lon']
+    x  = np.degrees(lon)
+    assert x2 >= x and x >= x1
+    assert y2 >= y and y >= y1
+    bi = lambda Q12,Q22,Q11,Q21: (1./((x2-x1)*(y2-y1))) * (Q11*(x2-x)*(y2-y) + Q21*(x-x1)*(y2-y) + Q12*(x2-x)*(y-y1) + Q22*(x-x1)*(y-y1))
+    return {'p': bi(*pl), 'T': bi(*Tl), 'dT': bi(*dTl)*1e3, 'e': bi(*el), 'ah': bi(*ahl), 'aw': bi(*awl), 'la': bi(*lal), 'Tm': bi(*Tml), 'Gn_h': bi(*Gn_hl), 'Ge_h': bi(*Ge_hl), 'Gn_w': bi(*Gn_wl), 'Ge_w': bi(*Ge_wl)}
 
-def gpt3grid(lon, lat, grid):
+
+def get_grid_nodes(lon, lat, grid):
     """ Grid file: https://vmf.geo.tuwien.ac.at/codes/gpt3_5.grd
     """
 
@@ -95,3 +243,13 @@ def gpt3grid(lon, lat, grid):
     assert (tld['lon'] <= np.degrees(lon)) and (brd['lon'] > np.degrees(lon))
 
     return tld, trd, bld, brd
+
+def gpt3(t, lon, lat, hgt, grid):
+# first get the four surrounding ndes
+    tld, trd, bld, brd = get_grid_nodes(lon, lat, grid)
+# bilinear interpolation (we must first compute fractional doy)
+    doy = int(t.strftime('%j'))
+    t0 = datetime.datetime(t.year, t.month, t.day)
+    doy += (t-t0).total_seconds() / 86400.
+    meteo = bilinear_interpolation(doy, lat, lon, hgt, tld, trd, bld, brd)
+    return meteo
