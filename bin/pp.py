@@ -38,13 +38,20 @@ parser.add_argument("--cut-off-angle",
     type=float,
     default = 10.,
     help='Cut-off angle to use in [deg].')
-parser.add_argument("--sigm0", 
+parser.add_argument("--sigma0", 
     metavar='SIGMA0_APRIORI',
     dest='sigma0',
     required=False,
     type=float,
     default = 10.,
     help='A-priori std. deviation of unit weight [m].')
+parser.add_argument("--rcvr-clock-poly", 
+    metavar='DELTA_T_RECEIVER_ORDER',
+    dest='rcvr_clk_order',
+    required=False,
+    type=int,
+    default = 3,
+    help='Order of polynomial to model the receiver clock offset.')
 parser.add_argument("--gpt3-grid", 
     metavar='GPT35_GRID_FILE',
     dest='gpt3',
@@ -156,7 +163,7 @@ def main() -> int:
             return 1
 
 # construct an Interpolator
-        intrp = interpolator.Sp3Interpolator(args.sp3, [args.satsys], 1800, 4, args.interp_type, True, ['M', 'E'])
+        intrp = interpolator.Sp3Interpolator(args.sp3, [args.satsys], 3600, 10, args.interp_type, True, ['M', 'E'])
 
 # Construct a RINEX instance to extract observations from
         rnx = GnssRinex(args.rnx)
@@ -174,97 +181,118 @@ def main() -> int:
         zhd, zwd = tropo(rnx.time_first_obs, lat, lon, hgt, args.gpt3)
 
 # LS matrices and info
-        dl = []; J = []; w = []; x0 = site_xyz + [0., 0.]
+        dl = []; J = []; w = []; x0 = site_xyz + [0.]
         num_obs = 0; num_obs_used = 0;
         sigma0 = args.sigma0
         var0 = sigma0 * sigma0
         rawobs = {}
         sats_used = []
-        residuals = {}
+        num_epochs = 0
 
-# Loop throufh data block, and compute observations
+# partials w.r.t receiver clock polynomial model: 
+# a0 + a1*dt + a2*dt^2 + ae*dt^3 + ...
+# returned as [1, dt, dt^2 ...]
+        clk_partials = lambda dt : [ np.power(dt,n) for n in range(args.rcvr_clk_order+1) ]
+        clk_value_at = lambda x,dt : sum([a*np.power(dt,n) for n,a in enumerate(x[3:])])
+
+# Loop through the RINEX file, block-by-block and collect infor for further
+# processing. While loopoing, formulate the LS matrices to be solved for once 
+# we are through with the file.
         for block in rnx:
-            #try:
-                t = block.t()
-# consider only GPS satellite, loop through each GPS satellite
+                t = block.t() ## current epoch (of obs/block)
+                epoch_used = False
+# consider only GPS satellite; loop through each GPS satellite in the block
                 for sat, obs in block.filter_satellite_system("gps", False):
+# if the satellite is not in eclusion list,
                     if sat not in args.sat_exclude:
-                        num_obs += 1
-                        p1 = fetch(obs, 'C1P', 'C1L', 'C1C')
-                        p2 = fetch(obs, 'C2W', 'C2L')
-# get satellite position in ITRF
+                        num_obs += 1 ## total number of observations
+# get code observations for L1 and L2
+                        p1 = fetch(obs, 'C1W', 'C1C', 'C1X')
+                        p2 = fetch(obs, 'C2W', 'C2C', 'C2D', 'C2P', 'C2X', 'C2S', 'C2L')
+# get satellite position in ITRF (interpolation)
                         try:
                             x,y,z,clk = intrp.sat_at(sat, t)
                         except:
                             x = None
-                        if p1 is not None and p2 is not None and x is not None:
+# if we do have P1 and P2 AND we have satellite coordinates and clock 
+# correction, carry on ...
+                        if (p1 is not None and p2 is not None) and (x is not None and clk is not None):
                             p1 = p1['value']
                             p2 = p2['value']
-                            p3 = (gs.GPS_L1_FREQ * gs.GPS_L1_FREQ * p1 - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ * p2) / (gs.GPS_L1_FREQ*gs.GPS_L1_FREQ - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ)
-# compute azimouth and elevation
+# compute azimouth and elevation (receiver-to-satellite)
                             az, el = azele(np.array(site_xyz), np.array((x,y,z)), R)
+# if we are above cut-off angle ...
                             if el > np.radians(args.cutoff):
-# make L3 linear combination
+# make P3 linear combination
+                                p3 = (gs.GPS_L1_FREQ * gs.GPS_L1_FREQ * p1 - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ * p2) / (gs.GPS_L1_FREQ*gs.GPS_L1_FREQ - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ)
+# compute receiver-to-satellite distance and partials w.r.t. r_rec
                                 r, drdx, drdy, drdz = pseudorange(np.array(site_xyz), np.array((x,y,z)))
+# tropospheric correction
                                 dT = dtrp(t, lat, lon, hgt, el, zhd, zwd)
+# time from t0 (i.e. start of RINEX) for receiver clock correction
                                 dsec = (t-rnx.time_first_obs).total_seconds()
-                                p3res = p3 + gs.C * clk - (r + x0[3] + dsec*x0[4] + dT)
+# residual: observed - computed
+                                p3res = p3 + gs.C * clk - (r + x0[3] + dT)
                                 if abs(p3res) < 8e3:
-                                    num_obs_used += 1
-                                    dl.append(p3res)
-                                    J.append([drdx, drdy, drdz, 1e0, dsec])
-                                    w.append(var0/weight(el))
-                                    
+                                    num_obs_used += 1 # count used observations
+                                    epoch_used = True # epoch is used
+                                    dl.append(p3res)  # append residual to vector
+# Jacobian
+                                    J.append([drdx, drdy, drdz]+clk_partials(dsec))
+                                    w.append(weight(el)/var0) # weight of obs
+# store information of this observation for later use
                                     if t not in rawobs: rawobs[t] = []
                                     rawobs[t].append({'sat':sat, 'xyzsat': np.array((x,y,z)), 'p3': p3, 'el': el, 'clksat': clk, 'mark': 'used', 'res': dl[-1], 'dsec': dsec})
-# add some info
+# add satellite to used satellites
                                     if not sat in sats_used: sats_used.append(sat)
                                 else:
                                     print("Residual too high! Observation skipped, sat={:}@{:}, res={:}km".format(sat, t, p3res*1e-3))
                         else:
                             # print("Failed to find observable for sat {:} at {:}".format(sat, t))
                             pass
-                #except:
-                #    pass
+# augment num_epochs if any observation for this epoch was used
+                num_epochs += int(epoch_used)
 
 # Plots
         # infoplot('t', 'res', rawobs, 'Raw Observation Residuals', [])
-        infoplot('el', 'res', rawobs, 'Raw Observation Residuals', [])
+        # infoplot('el', 'res', rawobs, 'Raw Observation Residuals', [])
         print("Used {:} out of {:} observations ~{:.1f}%".format(num_obs_used, num_obs, num_obs_used * 100. / num_obs))
 
-# iterative Least Squares solution
-        x0 = np.array(x0)
+# iterative Least Squares solution:
+# ---------------------------------------------------------------------------
+        x0 = np.concatenate((np.array(x0[0:3]), np.zeros(args.rcvr_clk_order+1)))
         dx = np.ones(x0.shape[0])
 # convergence criteria
         MAX_ITERATIONS = 10
         iteration = 0
         while iteration<5 or (np.all(np.less([1e-2, 1e-2, 1e-2, 1e-6, 1e-6], np.absolute(dx))) and iteration < MAX_ITERATIONS):
             iteration += 1
-            J  = np.array(J)
-            dl = np.array(dl)
+            J  = np.array(J)  # to numpy matrix
+            dl = np.array(dl) # to numpy vector
 # var-covar matrix
             Q = np.linalg.inv(J.transpose() @ np.diag(w) @ J)
 # estimate corrections
             dx = (Q @ J.transpose() @ np.diag(w) @ dl)
-# compute new estimates
+# compute new estimates x_new <- x_apriori + dx
             x0 = x0 + dx
+# get the cartesian to topocentric rotation matrix (again)
             lat, lon, hgt = transformations.car2ell(x0[0], x0[1], x0[2])
             Rt = transformations.geodetic2lvlh(lat, lon)
             R = Rt.transpose()
-# compute residuals
+# compute residuals for all observations that are marked 'used'
             resi = []
-            for t,v in rawobs.items():
+            for t, v in rawobs.items():
                 for satobs in v:
                     if satobs['mark'] == 'used':
                         xyzrec = np.array((x0[0], x0[1], x0[2]))
                         r, _, _, _ = pseudorange(xyzrec, satobs['xyzsat'])
                         dT = dtrp(t, lat, lon, hgt, satobs['el'], zhd, zwd)
-                        res = satobs['p3'] + gs.C * satobs['clksat'] - (r + x0[3] + satobs['dsec']*x0[4] + dT)
+                        res = satobs['p3'] + gs.C * satobs['clksat'] - (r + dT + clk_value_at(x0, satobs['dsec']))
                         resi.append(res)
                         satobs['res'] = res
 # variance of unit weight
             numobsi = dl.shape[0]
-            numpars = 5
+            numpars = 3 + args.rcvr_clk_order + 1
             u = np.array((resi))
             sigma0 = np.sqrt(u @ np.diag(w) @ u.transpose() / (numobsi - numpars))
             print("LS iteration {:}".format(iteration))
@@ -274,17 +302,17 @@ def main() -> int:
 # remove observations with large residuals and prepare matrices for new iteration
             J = []; dl = []; w = [];
             obs_flagged = 0;
-            for t,v in rawobs.items():
+            for t, v in rawobs.items():
                 for satobs in v:
                     if satobs['mark'] == 'used':
                         xyzrec = np.array((x0[0], x0[1], x0[2]))
                         r, drdx, drdy, drdz = pseudorange(xyzrec, satobs['xyzsat'])
                         az, el = azele(xyzrec, satobs['xyzsat'], R)
                         satobs['el'] = el
-                        if (abs(satobs['res']) <= 3e0 * sigma0) or (iteration<2):
+                        if (abs(satobs['res']) <= 3e0 * sigma0):
                             dl.append(satobs['res'])
-                            J.append([drdx, drdy, drdz, 1e0, satobs['dsec']])
-                            w.append(sigma0*sigma0/weight(satobs['el']))
+                            J.append([drdx, drdy, drdz]+clk_partials(satobs['dsec']))
+                            w.append(weight(satobs['el'])/sigma0/sigma0) # weight of obs
                         else:
                             satobs['mark'] = 'outlier'
                             obs_flagged += 1
