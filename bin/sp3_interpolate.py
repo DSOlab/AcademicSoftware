@@ -36,7 +36,7 @@ parser.add_argument("--interpolation",
 
 def main() -> int:
 
-    try:
+    #try:
         args = parser.parse_args()
 
         if not os.path.isfile(args.sp3):
@@ -74,21 +74,40 @@ def main() -> int:
         sx=[]; sy=[]; sz=[]; st=[];
         for k,v in data.items():
             st.append(k); sx.append(v['x']); sy.append(v['y']); sz.append(v['z']);
+
+# we have another class that can do this using the sp3 file (just for validation)
+        xj=[]; yj=[]; zj=[]; tj=[];
+        satsys = satid[0]
+        # intrp = interpolator.Sp3Interpolator(args.sp3, [satsys], 1800, 4, args.interp_type, True, ['M', 'E'])
+        intrp = interpolator.Sp3Interpolator(args.sp3, [satsys], 1800, 4, 'Polynomial', True, ['M', 'E'])
+        t = sp3.t_start
+        while t <= (sp3.t_start + datetime.timedelta(hours=24)):
+            try:
+                xc,yc,zc,clk = intrp.sat_at(satid, t)
+                tj.append(t)
+                xj.append(xc); yj.append(yc); zj.append(zc);
+            except:
+                print("Warning. Failed interpolating at {:}".format(t), file=sys.stderr)
+            t += datetime.timedelta(seconds=5)
+
         
 # plot results and data points
         fig, axs = plt.subplots(3, 1, sharex=True)
         axs[0].scatter(st, sx, c='tab:red', s=.9, alpha=.5, edgecolors='none');#axs[0].set_title(r"Component $X$");
         axs[0].scatter(ti, xi, c='tab:green', s=.9, alpha=.5, edgecolors='none');#axs[0].set_title(r"Component $X$");
+        axs[0].scatter(tj, xj, c='tab:blue', s=.9, alpha=.5, edgecolors='none');#axs[0].set_title(r"Component $X$");
         axs[1].scatter(st, sy, c='tab:red', s=.9, alpha=.5, edgecolors='none');#axs[1].set_title(r"Component $Y$");
         axs[1].scatter(ti, yi, c='tab:green', s=.9, alpha=.5, edgecolors='none');#axs[1].set_title(r"Component $Y$");
+        axs[1].scatter(tj, yj, c='tab:blue', s=.9, alpha=.5, edgecolors='none');#axs[0].set_title(r"Component $X$");
         axs[2].scatter(st, sz, c='tab:red', s=.9, alpha=.5, edgecolors='none');#axs[2].set_title(r"Component $Z$");
         axs[2].scatter(ti, zi, c='tab:green', s=.9, alpha=.5, edgecolors='none');#axs[2].set_title(r"Component $Z$");
+        axs[2].scatter(tj, zj, c='tab:blue', s=.9, alpha=.5, edgecolors='none');#axs[0].set_title(r"Component $X$");
         fig.tight_layout()
         plt.show()
 
-    except Exception as err:
-        print("Error. Exception caught:", err)
-        return 100
+    #except Exception as err:
+    #    print("Error. Exception caught:", err)
+    #    return 100
 
 if __name__ == "__main__":
     sys.exit(main())

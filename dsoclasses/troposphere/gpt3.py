@@ -33,86 +33,8 @@ def askne_zwd(e, Tm, wvlr):
     k3  = 377600.
 
     # specific gas constant for dry consituents
-    Rd = R/dMtr
+    Rd = Rg/dMtr
     return 1e-6*(k2p + k3/Tm)*Rd/(wvlr + 1.)/gm*e
-
-def gmf(mjd, lat, lon):
-    doy = mjd  - 44239. + 1. - 28
-    nmax = 9
-    mmax = 9
-    x = np.cos(dlat)*DCOS(dlon)
-    y = np.cos(dlat)*np.sin(dlon)
-    z = np.sin(dlat)
-    V = np.zeros(10,10)
-    W = np.zeros(10,10)
-    V[0,0] = 1.
-    W[0,0] = 0.
-    V[1,0] = z * V[0,0]
-    W[1,0] = 0.
-    for n in range(2, nmax + 1):
-        V[n + 1, 0] = ((2 * n - 1) * z * V[n, 0] - (n - 1) * V[n - 1, 0]) / n
-        W[n + 1, 0] = 0.0
-    for m in range(1, nmax + 1):
-        V[m + 1, m + 1] = (2 * m - 1) * (x * V[m, m] - y * W[m, m])
-        W[m + 1, m + 1] = (2 * m - 1) * (x * W[m, m] + y * V[m, m])
-        if m < nmax:
-            V[m + 2, m + 1] = (2 * m + 1) * z * V[m + 1, m + 1]
-            W[m + 2, m + 1] = (2 * m + 1) * z * W[m + 1, m + 1]
-        for n in range(m + 2, nmax + 1):
-            V[n + 1, m + 1] = ((2 * n - 1) * z * V[n, m + 1] - (n + m - 1) * V[n - 1, m + 1]) / (n - m)
-            W[n + 1, m + 1] = ((2 * n - 1) * z * W[n, m + 1] - (n + m - 1) * W[n - 1, m + 1]) / (n - m)
-    bh = 0.0029
-    c0h = 0.062
-    if (lat < 0):
-        phh  = np.pi
-        c11h = 0.007
-        c10h = 0.002
-    else:
-        phh  = 0
-        c11h = 0.005
-        c10h = 0.001
-    ch = c0h + ((np.cos(doy/365.25*2*np.pi + phh)+1.)*c11h/2. + c10h)*(1-np.cos(dlat))
-    ahm = 0.0
-    aha = 0.0
-    i = 0
-    for n in range(nmax + 1):
-        for m in range(n + 1):
-            ahm += (ah_mean[i] * V[n + 1][m + 1] + bh_mean[i] * W[n + 1][m + 1])
-            aha += (ah_amp[i] * V[n + 1][m + 1] + bh_amp[i] * W[n + 1][m + 1])
-            i += 1
-    ah  = (ahm + aha*np.cos(doy/365.25*2.*np.pi))*1e-5
-    sine   = np.sin(np.pi/2 - zd)
-    cose   = np.cos(np.pi/2 - zd)
-    beta   = bh/(sine + ch  )
-    gamma  = ah/(sine + beta)
-    topcon = (1. + ah/(1. + bh/(1. + ch)))
-    gmfh   = topcon/(sine+gamma)
-    a_ht = 2.53e-5
-    b_ht = 5.49e-3
-    c_ht = 1.14e-3
-    hs_km  = dhgt/1000.
-    beta   = b_ht/(sine + c_ht )
-    gamma  = a_ht/(sine + beta)
-    topcon = (1. + a_ht/(1. + b_ht/(1. + c_ht)))
-    ht_corr_coef = 1/sine - topcon/(sine + gamma)
-    ht_corr      = ht_corr_coef * hs_km
-    gmfh         = gmfh + ht_corr
-    bw = 0.00146
-    cw = 0.04391
-    awm = 0.0
-    awa = 0.0
-    i = 0
-    for n in range(nmax + 1):
-        for m in range(n + 1):
-            awm += (aw_mean[i] * V[n + 1][m + 1] + bw_mean[i] * W[n + 1][m + 1])
-            awa += (aw_amp[i] * V[n + 1][m + 1] + bw_amp[i] * W[n + 1][m + 1])
-            i += 1
-    aw =  (awm + awa*np.cos(doy/365.25*2*np.pi))*1e-5
-    beta   = bw/(sine + cw )
-    gamma  = aw/(sine + beta)
-    topcon = (1. + aw/(1. + bw/(1. + cw)))
-    gmfw   = topcon/(sine+gamma)
-    return gmfh, gmfw
 
 def parse_gpt3_line(line):
     data_keys = ['lat', 'lon', 'p:', 'T:', 'Q:', 'dT:', 'undu', 'Hs', 'a_h:', 'a_w:', 'lambda:', 'Tm:', 'Gn_h:', 'Ge_h:', 'Gn_w:', 'Ge_w:']
