@@ -65,17 +65,21 @@ class Sp3:
                                 clk = float(line[46:60].strip())
                                 epoch_entries['c'] = clk*cscale; # default is microsec
 # x-, y- and z- sdev value may also be present
-                            if len(line) > 61:
-                                xsdev, ysdev, zsdev = [int(x) for x in line[61:69].split()]
-                                epoch_entries['xsdev'] = xsdev; #
-                                epoch_entries['ysdev'] = ysdev; #
-                                epoch_entries['zsdev'] = zsdev; #
+                            if len(line.rstrip()) > 61:
+                                print(line, len(line.rstrip()))
+                                fields = line[61:69].split()
+                                if len(fields) < 3:
+                                    while len(fields) < 3: fields += [99999]
+                                xsdev, ysdev, zsdev = [int(x) for x in fields]
+                                epoch_entries['xsdev'] = xsdev if xsdev<99999 else None#
+                                epoch_entries['ysdev'] = ysdev if ysdev<99999 else None#
+                                epoch_entries['zsdev'] = zsdev if zsdev<99999 else None#
 # clk-sdev may also be present
-                            if len(line) > 71:
+                            if len(line.rstrip()) > 71:
                                 csdev = int(line[70:73].strip())
                                 epoch_entries['csdev'] = csdev; #
 # Event flags
-                            if len(line) > 74:
+                            if len(line.rstrip()) > 74:
                                 events = (line[74]+line[75]+line[78]+line[79]).strip()
                                 epoch_entries['events'] = events # string
 

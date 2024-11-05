@@ -38,6 +38,13 @@ parser.add_argument("--cut-off-angle",
     type=float,
     default = 10.,
     help='Cut-off angle to use in [deg].')
+parser.add_argument("--sigm0", 
+    metavar='SIGMA0_APRIORI',
+    dest='sigma0',
+    required=False,
+    type=float,
+    default = 10.,
+    help='A-priori std. deviation of unit weight [m].')
 parser.add_argument("--gpt3-grid", 
     metavar='GPT35_GRID_FILE',
     dest='gpt3',
@@ -136,7 +143,8 @@ def dtrp(t, lat, lon, hgt, el, zhd, zwd):
 # weight = lambda el: np.sin(el) * np.sin(el)
 def weight(el):
     assert el >= 0. and el <= np.pi / 2
-    return np.sin(el) * np.sin(el)
+    # return np.sin(el) * np.sin(el)
+    return 1. / np.cos(el)
 
 def main() -> int:
 
@@ -166,8 +174,10 @@ def main() -> int:
         zhd, zwd = tropo(rnx.time_first_obs, lat, lon, hgt, args.gpt3)
 
 # LS matrices and info
-        dl = []; J = []; w = []; x0 = site_xyz + [0.]
+        dl = []; J = []; w = []; x0 = site_xyz + [0., 0.]
         num_obs = 0; num_obs_used = 0;
+        sigma0 = args.sigma0
+        var0 = sigma0 * sigma0
         rawobs = {}
         sats_used = []
         residuals = {}
@@ -196,16 +206,17 @@ def main() -> int:
                             if el > np.radians(args.cutoff):
 # make L3 linear combination
                                 r, drdx, drdy, drdz = pseudorange(np.array(site_xyz), np.array((x,y,z)))
-                                dT = dtrp(t, lat, lon, hgt, el, zhd, zwd) 
-                                p3res = p3 + gs.C * clk - r - x0[3] - dT
+                                dT = dtrp(t, lat, lon, hgt, el, zhd, zwd)
+                                dsec = (t-rnx.time_first_obs).total_seconds()
+                                p3res = p3 + gs.C * clk - (r + x0[3] + dsec*x0[4] + dT)
                                 if abs(p3res) < 8e3:
                                     num_obs_used += 1
-                                    dl.append(p3 + gs.C * clk - (r + x0[3] + dT))
-                                    J.append([drdx, drdy, drdz, 1e0])
-                                    w.append(weight(el))
+                                    dl.append(p3res)
+                                    J.append([drdx, drdy, drdz, 1e0, dsec])
+                                    w.append(var0/weight(el))
                                     
                                     if t not in rawobs: rawobs[t] = []
-                                    rawobs[t].append({'sat':sat, 'xyzsat': np.array((x,y,z)), 'p3': p3, 'el': el, 'clksat': clk, 'mark': 'used', 'res': dl[-1]})
+                                    rawobs[t].append({'sat':sat, 'xyzsat': np.array((x,y,z)), 'p3': p3, 'el': el, 'clksat': clk, 'mark': 'used', 'res': dl[-1], 'dsec': dsec})
 # add some info
                                     if not sat in sats_used: sats_used.append(sat)
                                 else:
@@ -223,13 +234,18 @@ def main() -> int:
 
 # iterative Least Squares solution
         x0 = np.array(x0)
-        for i in range(0,4):
+        dx = np.ones(x0.shape[0])
+# convergence criteria
+        MAX_ITERATIONS = 10
+        iteration = 0
+        while iteration<5 or (np.all(np.less([1e-2, 1e-2, 1e-2, 1e-6, 1e-6], np.absolute(dx))) and iteration < MAX_ITERATIONS):
+            iteration += 1
             J  = np.array(J)
             dl = np.array(dl)
 # var-covar matrix
             Q = np.linalg.inv(J.transpose() @ np.diag(w) @ J)
 # estimate corrections
-            dx = Q @ J.transpose() @ np.diag(w) @ dl
+            dx = (Q @ J.transpose() @ np.diag(w) @ dl)
 # compute new estimates
             x0 = x0 + dx
             lat, lon, hgt = transformations.car2ell(x0[0], x0[1], x0[2])
@@ -243,17 +259,17 @@ def main() -> int:
                         xyzrec = np.array((x0[0], x0[1], x0[2]))
                         r, _, _, _ = pseudorange(xyzrec, satobs['xyzsat'])
                         dT = dtrp(t, lat, lon, hgt, satobs['el'], zhd, zwd)
-                        res = satobs['p3'] + gs.C * satobs['clksat'] - (r + x0[3]+dT)
+                        res = satobs['p3'] + gs.C * satobs['clksat'] - (r + x0[3] + satobs['dsec']*x0[4] + dT)
                         resi.append(res)
                         satobs['res'] = res
 # variance of unit weight
             numobsi = dl.shape[0]
-            numpars = 4
+            numpars = 5
             u = np.array((resi))
-            sigma = np.sqrt(u @ np.diag(w) @ u.transpose() / (numobsi - numpars))
-            print("LS iteration {:}".format(i))
+            sigma0 = np.sqrt(u @ np.diag(w) @ u.transpose() / (numobsi - numpars))
+            print("LS iteration {:}".format(iteration))
             print("Num of observations: {:}".format(numobsi))
-            print("Sigma0 = {:}".format(np.sqrt(sigma)))
+            print("Sigma0 = {:.3f}".format(sigma0))
 
 # remove observations with large residuals and prepare matrices for new iteration
             J = []; dl = []; w = [];
@@ -265,19 +281,19 @@ def main() -> int:
                         r, drdx, drdy, drdz = pseudorange(xyzrec, satobs['xyzsat'])
                         az, el = azele(xyzrec, satobs['xyzsat'], R)
                         satobs['el'] = el
-                        if (abs(satobs['res']) <= 3e0 * sigma) or (i<2):
+                        if (abs(satobs['res']) <= 3e0 * sigma0) or (iteration<2):
                             dl.append(satobs['res'])
-                            J.append([drdx, drdy, drdz, 1e0])
-                            w.append(weight(satobs['el']))
+                            J.append([drdx, drdy, drdz, 1e0, satobs['dsec']])
+                            w.append(sigma0*sigma0/weight(satobs['el']))
                         else:
                             satobs['mark'] = 'outlier'
                             obs_flagged += 1
             print("Observations marked: {:}".format(obs_flagged))
 # plot residuals for this iteration
             print(dx)
-            if i >= 2:
+            if iteration >= 2:
                 # infoplot('t', 'res', rawobs,  'Observation Residuals iteration {:}'.format(i+1), [])
-                infoplot('el', 'res', rawobs, 'Observation Residuals iteration {:}'.format(i+1), [])
+                infoplot('el', 'res', rawobs, 'Observation Residuals iteration {:}'.format(iteration+1), [])
 
 
     #except Exception as err:
