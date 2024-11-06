@@ -147,6 +147,8 @@ def dtrp(t, lat, lon, hgt, el, zhd, zwd):
     return zhd * gmfh + zwd * gmfw
 
 def weight(el):
+    """ Higher elevation means higher weight !
+    """
     assert el >= 0. and el <= np.pi / 2
     return np.sin(el) * np.sin(el)
     # return 1. / np.cos(el)
@@ -258,7 +260,7 @@ def main() -> int:
 
 # iterative Least Squares solution:
 # ---------------------------------------------------------------------------
-        P = lambda var, weights: np.diag([var / xj / xj for xj in weights])
+        P = lambda var, weights: np.diag([xj * xj * var for xj in weights])
         x0 = np.concatenate((np.array(x0[0:3]), np.zeros(args.rcvr_clk_order+1)))
         dx = np.ones(x0.shape[0])
 # convergence criteria
@@ -283,15 +285,18 @@ def main() -> int:
             R = Rt.transpose()
 # compute residuals for all observations that are marked 'used'
             resi = []
+            kokoP = P(var0, w)
+            kokoi=0
             for t, v in rawobs.items():
                 for satobs in v:
                     if satobs['mark'] == 'used':
-                        xyzrec = np.array((x0[0], x0[1], x0[2]))
-                        r, _, _, _ = pseudorange(xyzrec, satobs['xyzsat'])
+                        r, _, _, _ = pseudorange(np.array((x0[0], x0[1], x0[2])), satobs['xyzsat'])
                         dT = dtrp(t, lat, lon, hgt, satobs['el'], zhd, zwd)
                         res = satobs['p3'] + gs.C * satobs['clksat'] - (r + dT + clk_value_at(x0, satobs['dsec']))
                         resi.append(res)
                         satobs['res'] = res
+                        print("r={:.1f} el={:.1f} p={:.3f}".format(res, np.degrees(satobs['el']), kokoP[kokoi,kokoi]))
+                        kokoi+=1
 # variance of unit weight
             numobsi = dl.shape[0]
             numpars = 3 + args.rcvr_clk_order + 1
@@ -316,7 +321,7 @@ def main() -> int:
                         r, drdx, drdy, drdz = pseudorange(xyzrec, satobs['xyzsat'])
                         az, el = azele(xyzrec, satobs['xyzsat'], R)
                         satobs['el'] = el
-                        if (abs(satobs['res']) <= 1e0 * sigma0):
+                        if (abs(satobs['res']) <= 10e0 * sigma0):
                             dl.append(satobs['res'])
                             J.append([drdx, drdy, drdz]+clk_partials(satobs['dsec']))
                             w.append(weight(satobs['el'])) # weight of obs
