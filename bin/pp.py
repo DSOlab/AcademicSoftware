@@ -146,12 +146,10 @@ def dtrp(t, lat, lon, hgt, el, zhd, zwd):
     gmfh, gmfw = gmf.gmf(t, lat, lon, hgt, np.pi/2-el)
     return zhd * gmfh + zwd * gmfw
 
-# weight = lambda el: np.cos(el)
-# weight = lambda el: np.sin(el) * np.sin(el)
 def weight(el):
     assert el >= 0. and el <= np.pi / 2
-    # return np.sin(el) * np.sin(el)
-    return 1. / np.cos(el)
+    return np.sin(el) * np.sin(el)
+    # return 1. / np.cos(el)
 
 def main() -> int:
 
@@ -239,7 +237,7 @@ def main() -> int:
                                     dl.append(p3res)  # append residual to vector
 # Jacobian
                                     J.append([drdx, drdy, drdz]+clk_partials(dsec))
-                                    w.append(weight(el)/var0) # weight of obs
+                                    w.append(weight(el)) # weight of obs
 # store information of this observation for later use
                                     if t not in rawobs: rawobs[t] = []
                                     rawobs[t].append({'sat':sat, 'xyzsat': np.array((x,y,z)), 'p3': p3, 'el': el, 'clksat': clk, 'mark': 'used', 'res': dl[-1], 'dsec': dsec})
@@ -260,19 +258,23 @@ def main() -> int:
 
 # iterative Least Squares solution:
 # ---------------------------------------------------------------------------
+        P = lambda var, weights: np.diag([var / xj / xj for xj in weights])
         x0 = np.concatenate((np.array(x0[0:3]), np.zeros(args.rcvr_clk_order+1)))
         dx = np.ones(x0.shape[0])
 # convergence criteria
         MAX_ITERATIONS = 10
         iteration = 0
-        while iteration<5 or (np.all(np.less([1e-2, 1e-2, 1e-2, 1e-6, 1e-6], np.absolute(dx))) and iteration < MAX_ITERATIONS):
+        max_diffs = [1e-2, 1e-2, 1e-2] + [1e-9 for i in range(args.rcvr_clk_order+1)]
+        # print(max_diffs)
+        # print(np.absolute(dx))
+        while np.any(np.greater_equal(np.absolute(dx), max_diffs)) and iteration < MAX_ITERATIONS:
             iteration += 1
             J  = np.array(J)  # to numpy matrix
             dl = np.array(dl) # to numpy vector
-# var-covar matrix
-            Q = np.linalg.inv(J.transpose() @ np.diag(w) @ J)
+# var-covar matrix (un-scaled)
+            N = np.linalg.inv(J.transpose() @ P(var0, w) @ J)
 # estimate corrections
-            dx = (Q @ J.transpose() @ np.diag(w) @ dl)
+            dx = (N @ J.transpose() @ P(var0, w) @ dl)
 # compute new estimates x_new <- x_apriori + dx
             x0 = x0 + dx
 # get the cartesian to topocentric rotation matrix (again)
@@ -294,10 +296,15 @@ def main() -> int:
             numobsi = dl.shape[0]
             numpars = 3 + args.rcvr_clk_order + 1
             u = np.array((resi))
-            sigma0 = np.sqrt(u @ np.diag(w) @ u.transpose() / (numobsi - numpars))
+            sigma0 = np.sqrt(u @ P(var0, w) @ u.transpose() / (numobsi - numpars))
+            var0 = sigma0 * sigma0
             print("LS iteration {:}".format(iteration))
+            print("-----------------------------------------------")
             print("Num of observations: {:}".format(numobsi))
-            print("Sigma0 = {:.3f}".format(sigma0))
+            print("Sigma0 = {:.1f}[m]".format(sigma0))
+
+# variance of residuals
+            # Vres = var0 * P(1./var0, [1./wi for wi in w]) - var0 * (J @ N @ J.transpose())
 
 # remove observations with large residuals and prepare matrices for new iteration
             J = []; dl = []; w = [];
@@ -309,20 +316,26 @@ def main() -> int:
                         r, drdx, drdy, drdz = pseudorange(xyzrec, satobs['xyzsat'])
                         az, el = azele(xyzrec, satobs['xyzsat'], R)
                         satobs['el'] = el
-                        if (abs(satobs['res']) <= 3e0 * sigma0):
+                        if (abs(satobs['res']) <= 1e0 * sigma0):
                             dl.append(satobs['res'])
                             J.append([drdx, drdy, drdz]+clk_partials(satobs['dsec']))
-                            w.append(weight(satobs['el'])/sigma0/sigma0) # weight of obs
+                            w.append(weight(satobs['el'])) # weight of obs
                         else:
                             satobs['mark'] = 'outlier'
                             obs_flagged += 1
-            print("Observations marked: {:}".format(obs_flagged))
+            print("Num. observations marked: {:}".format(obs_flagged))
+# print estimates
+            print("Estimates:") 
+            print("{:15.3f} +- {:7.3f} ({:+6.3f}) [m]".format(x0[0], np.sqrt(var0*N[0,0]), dx[0]))
+            print("{:15.3f} +- {:7.3f} ({:+6.3f}) [m]".format(x0[1], np.sqrt(var0*N[1,1]), dx[1]))
+            print("{:15.3f} +- {:7.3f} ({:+6.3f}) [m]".format(x0[2], np.sqrt(var0*N[2,2]), dx[2]))
+            for j in range(args.rcvr_clk_order+1): print("{:.3f} +- {:.3f}[nsec]".format((x0[3+j]/gs.C)*1e9, np.sqrt(var0*N[3+j,3+j])), end=' ')
+            print("")
+
 # plot residuals for this iteration
-            print(dx)
             if iteration >= 2:
                 # infoplot('t', 'res', rawobs,  'Observation Residuals iteration {:}'.format(i+1), [])
                 infoplot('el', 'res', rawobs, 'Observation Residuals iteration {:}'.format(iteration+1), [])
-
 
     #except Exception as err:
     #    print("Error. Exception caught:", err)
