@@ -1,5 +1,6 @@
 import numpy as np
 import datetime
+import attotime
 
 # mean gravity in m/s**2
 gm = 9.80665e0
@@ -171,7 +172,12 @@ def gpt3(t, lon, lat, hgt, grid):
     tld, trd, bld, brd = get_grid_nodes(lon, lat, grid)
 # bilinear interpolation (we must first compute fractional doy)
     doy = int(t.strftime('%j'))
-    t0 = datetime.datetime(t.year, t.month, t.day)
-    doy += (t-t0).total_seconds() / 86400.
+    try:
+        t0 = datetime.datetime(t.year, t.month, t.day)
+        doy += (t-t0).total_seconds() / 86400.
+    except: # is this maybe an attotime instance ?
+        t0 = attotime.attodatetime(t.year, t.month, t.day)
+        doy += float((t-t0).total_seconds()) / 86400.
+
     meteo = bilinear_interpolation(doy, lat, lon, hgt, tld, trd, bld, brd)
     return meteo

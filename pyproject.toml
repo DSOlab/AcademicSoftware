@@ -23,7 +23,8 @@ dependencies = [
   'numpy',
   'scipy',
   'basemap', 
-  'basemap-data-hires'
+  'basemap-data-hires',
+  'attotime'
 ]
 
 [project.urls]

@@ -3,7 +3,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation
-import datetime
+import datetime, attotime
 import argparse
 import os, sys
 
@@ -13,6 +13,11 @@ from dsoclasses.gnss import systems as gs
 from dsoclasses.rinex.gnss.rinex import GnssRinex
 from dsoclasses.time import gast
 from dsoclasses.troposphere import gmf, gpt3
+
+def athash(self): 
+    s = "{:}{:}{:}{:}{:}{:}{:}{:}".format(self.year, self.month, self.day, self.hour, self.minute, self.second, self.microsecond, self.nanosecond)
+    return int(s)
+attotime.attodatetime.__hash__ = athash
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--sp3", 
@@ -195,6 +200,11 @@ def main() -> int:
         clk_partials = lambda dt : [ np.power(dt,n) for n in range(args.rcvr_clk_order+1) ]
         clk_value_at = lambda x,dt : sum([a*np.power(dt,n) for n,a in enumerate(x[3:])])
 
+        f1 = gs.GPS_L1_FREQ
+        f2 = gs.GPS_L2_FREQ
+        f31 = f1*f1/(f1*f1 - f2*f2)
+        f32 = f2*f2/(f1*f1 - f2*f2)
+
 # Loop through the RINEX file, block-by-block and collect infor for further
 # processing. While loopoing, formulate the LS matrices to be solved for once 
 # we are through with the file.
@@ -224,13 +234,14 @@ def main() -> int:
 # if we are above cut-off angle ...
                             if el > np.radians(args.cutoff):
 # make P3 linear combination
-                                p3 = (gs.GPS_L1_FREQ * gs.GPS_L1_FREQ * p1 - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ * p2) / (gs.GPS_L1_FREQ*gs.GPS_L1_FREQ - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ)
+                                #p3 = (gs.GPS_L1_FREQ * gs.GPS_L1_FREQ * p1 - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ * p2) / (gs.GPS_L1_FREQ*gs.GPS_L1_FREQ - gs.GPS_L2_FREQ * gs.GPS_L2_FREQ)
+                                p3 = f31 * p1 - f32 * p2
 # compute receiver-to-satellite distance and partials w.r.t. r_rec
                                 r, drdx, drdy, drdz = pseudorange(np.array(site_xyz), np.array((x,y,z)))
 # tropospheric correction
                                 dT = dtrp(t, lat, lon, hgt, el, zhd, zwd)
 # time from t0 (i.e. start of RINEX) for receiver clock correction
-                                dsec = (t-rnx.time_first_obs).total_seconds()
+                                dsec = float((t-rnx.time_first_obs).total_nanoseconds()) * 1e-9
 # residual: observed - computed
                                 p3res = p3 + gs.C * clk - (r + x0[3] + dT)
                                 if abs(p3res) < 8e3:
@@ -260,7 +271,7 @@ def main() -> int:
 
 # iterative Least Squares solution:
 # ---------------------------------------------------------------------------
-        P = lambda var, weights: np.diag([xj * xj * var for xj in weights])
+        P = lambda var, weights: np.diag([xj * xj / 10. for xj in weights])
         x0 = np.concatenate((np.array(x0[0:3]), np.zeros(args.rcvr_clk_order+1)))
         dx = np.ones(x0.shape[0])
 # convergence criteria
@@ -285,8 +296,6 @@ def main() -> int:
             R = Rt.transpose()
 # compute residuals for all observations that are marked 'used'
             resi = []
-            kokoP = P(var0, w)
-            kokoi=0
             for t, v in rawobs.items():
                 for satobs in v:
                     if satobs['mark'] == 'used':
@@ -295,8 +304,7 @@ def main() -> int:
                         res = satobs['p3'] + gs.C * satobs['clksat'] - (r + dT + clk_value_at(x0, satobs['dsec']))
                         resi.append(res)
                         satobs['res'] = res
-                        print("r={:.1f} el={:.1f} p={:.3f}".format(res, np.degrees(satobs['el']), kokoP[kokoi,kokoi]))
-                        kokoi+=1
+                        # print("r={:5.1f}km el={:5.1f}[deg] p={:.3f}".format(res*1e-3, np.degrees(satobs['el']), weight(satobs['el'])*weight(satobs['el']))) 
 # variance of unit weight
             numobsi = dl.shape[0]
             numpars = 3 + args.rcvr_clk_order + 1

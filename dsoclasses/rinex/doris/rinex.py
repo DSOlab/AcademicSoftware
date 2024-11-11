@@ -97,6 +97,7 @@ class DorisRinex:
             self.dct = dct
 
         def t(self): return self.dct['epoch']
+        def clock_offset(self): return self.dct['clock_offset']
         def flag(self): return self.dct['flag']
         def nbeacons(self): return self.dct['num_beacons']
         def beacon(self, beaconid): return self.dct[beaconid]

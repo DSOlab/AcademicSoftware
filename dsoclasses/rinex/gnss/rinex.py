@@ -1,4 +1,5 @@
 import datetime
+import attotime
 import math
 import sys
 
@@ -18,15 +19,16 @@ class GnssRinex:
     
     def resolve_date(self, dstr):
         l = dstr.split()
-# maximum accuracy in datetime instances is microseconds
-        assert l[-1][-1] == "0"
         y, m, d, h, mn = [int(x) for x in l[0:5]]
         sec = float(l[5])
         s = int(sec)
         fmicrosec = (sec - s) * 1e6
+        microsec  = int((sec - s) * 1e6)
+        fnanosec  = (fmicrosec - microsec) * 1e3
+        nanosec = int(fnanosec)
         tstr = "{:4d}:{:02d}:{:02d} {:02d}:{:02d}:{:02d}".format(y, m, d, h, mn, s)
-        nofrag_t = datetime.datetime.strptime(tstr, "%Y:%m:%d %H:%M:%S")
-        return nofrag_t + datetime.timedelta(microseconds=int(fmicrosec))
+        pyt = datetime.datetime.strptime(tstr, "%Y:%m:%d %H:%M:%S")
+        return attotime.attodatetime(pyt.year, pyt.month, pyt.day, pyt.hour, pyt.minute, pyt.second, microsec, nanosec)
 
     def parse_header(self, fn):
         with open(fn, 'r') as fin:

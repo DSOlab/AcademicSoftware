@@ -8,7 +8,21 @@ month_day = [
 mtab = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 def cal2mjd(t):
-    secday = (float(t.hour*3600) + (float(t.minute*60) + (float(t.second) + float(t.microsecond) * 1e-6)))
+    """ Transform a calendar date to MJD and seconds of day.
+
+        The input parameter t, can be either
+        * a native python datetime instance, or
+        * an attodatetime instance
+
+        Return:
+            mjd    -> the (integral) MJD and
+            secday -> the (fractional) seconds of day
+    """
+    try:
+        secday = t.nanosecond * 1e-9
+    except:
+        secday = 0.
+    secday += (float(t.hour*3600) + (float(t.minute*60) + (float(t.second) + float(t.microsecond) * 1e-6)))
 
     yr = int(t.year)
     mn = int(t.month)
@@ -28,5 +42,15 @@ def cal2mjd(t):
     return mjd, secday
 
 def cal2fmjd(t):
+    """ Transform a calendar date to MJD and fraction of day.
+
+        The input parameter t, can be either
+        * a native python datetime instance, or
+        * an attodatetime instance
+
+        Return:
+            mjd -> the (integral) MJD + the fraction of day
+            The fraction of day is always in range [0, 1)
+    """
     mjd, sec = cal2mjd(t)
     return float(mjd) + sec / 86400.
