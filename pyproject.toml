@@ -22,8 +22,8 @@ classifiers = [
 dependencies = [
   'numpy',
   'scipy',
-  'basemap', 
-  'basemap-data-hires',
+#  'basemap', 
+#  'basemap-data-hires',
   'attotime'
 ]
 
