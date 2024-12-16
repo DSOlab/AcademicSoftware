@@ -2,6 +2,7 @@ import datetime
 import attotime
 import math
 import sys
+import numpy as np
 
 class ReceiverAntennaPcv:
     def __init__(self, antenna):
@@ -11,6 +12,18 @@ class ReceiverAntennaPcv:
         d = {'neu': neu, 'z1z2dz': z1z2dz, 'pcv': vals}
         self.pcv[freq] = d
     def pco(self, freq): return self.pcv[freq]['neu']
+    def pcv_hgt(self, freq, el): 
+        za = np.pi / 2. - el
+        assert za >= 0e0 and za <= np.pi / 2.
+        cp = int((np.degrees(za) - self.pcv[freq]['z1z2dz'][0]) / self.pcv[freq]['z1z2dz'][2])
+        np1 = cp + 1
+        x0 = self.pcv[freq]['z1z2dz'][0] + cp * self.pcv[freq]['z1z2dz'][2]
+        x1 = x0 + self.pcv[freq]['z1z2dz'][2]
+        x  = np.degrees(za)
+        assert np.degrees(za) >= x0 and np.degrees(za) < x1
+        y0 = self.pcv[freq]['pcv'][cp]
+        y1 = self.pcv[freq]['pcv'][np1]
+        return (y0*(x1-x) + y1*(x-x0)) / (x1-x0)
 
 class Atx:
 
