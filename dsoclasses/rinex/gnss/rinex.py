@@ -21,11 +21,24 @@ def fetch(dct, *args):
         return the observation (dictionary) first encountered, matched by *args.
         E.g. if the above dictionary is stored in dct,
         fetch(dct, 'C1P', 'C1C', 'C2P')
-        will return {'value': 23539032.74, 'lli': None, 'ssi': 6}
+        will return {'value': 23539032.74, 'lli': None, 'ssi': 6}, 'C1P'
     """
     for arg in args:
         if arg in dct:
-            return dct[arg]
+            return dct[arg], arg
+    raise RuntimeError("Error. Satellite observables do not include any of {:}".format(args))
+
+def fetchv(dct, *args):
+    """ Given a dictionary containing e.g.
+        R05 : {'C1C': {'value': 23539032.631, 'lli': None, 'ssi': 6}, 'L1C': {'value': 125829717.51, 'lli': 0, 'ssi': 6}, 'D1C': {'value': -4149.772, 'lli': None, 'ssi': 6}, 'S1C': {'value': 41.719, 'lli': None, 'ssi': None}, 'C1P': {'value': 23539032.74, 'lli': None, 'ssi': 6}, 'L1P': {'value': 125829714.502, 'lli': 0, 'ssi': 6}, 'D1P': {'value': -4149.698, 'lli': None, 'ssi': 6}, 'S1P': {'value': 41.062, 'lli': None, 'ssi': None}, 'C2P': {'value': 23539038.067, 'lli': None, 'ssi': 6}, 'L2P': {'value': 97867622.91, 'lli': 0, 'ssi': 6}, 'D2P': {'value': -3227.451, 'lli': None, 'ssi': 6}, 'S2P': {'value': 38.531, 'lli': None, 'ssi': None}, 'C2C': {'value': 23539037.837, 'lli': None, 'ssi': 6}, 'L2C': {'value': 97867623.908, 'lli': 0, 'ssi': 6}, 'D2C': {'value': -3227.359, 'lli': None, 'ssi': 6}, 'S2C': {'value': 38.531, 'lli': None, 'ssi': 6}}
+        return the observation (dictionary) first encountered, matched by *args.
+        E.g. if the above dictionary is stored in dct,
+        fetch(dct, 'C1P', 'C1C', 'C2P')
+        will return 23539032.74
+    """
+    for arg in args:
+        if arg in dct:
+            return dct[arg]['value']
     raise RuntimeError("Error. Satellite observables do not include any of {:}".format(args))
 
 class GnssRinex:
