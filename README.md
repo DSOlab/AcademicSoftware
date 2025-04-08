@@ -60,4 +60,4 @@ launch a local web server and open JupyterLab in your browser `jupyter lab --not
 
 ## A note on data
 
-The notebooks use data to showcase different analysis tasks. The data though are not distributed with the project, and you'll have to download them youself. You can conviniently place them at the `data/` top-level directory, or anywhere else you see fit. The actual filenames that appear on the notebooks are not (supposed to be) binding; its up to the user selection.
+The notebooks use data to showcase different analysis tasks. The data though are not distributed with the project, and you'll have to download them youself. You can conviniently place them at a `data/` top-level directory, or anywhere else you see fit. The actual filenames that appear on the notebooks are not (supposed to be) binding; its up to the user selection.
