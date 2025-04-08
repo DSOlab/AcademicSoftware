@@ -102,7 +102,7 @@ class DorisRinex:
         def nbeacons(self): return self.dct['num_beacons']
         def beacon(self, beaconid): return self.dct[beaconid]
         def __iter__(self): 
-            return ((key, value) for key, value in self.dct.items() if key not in ['epoch', 'flag', 'num_beacons'])
+            return ((key, value) for key, value in self.dct.items() if key not in ['epoch', 'flag', 'num_beacons', 'clock_offset'])
     
     def __init__(self, fn):
         self.filename = fn
@@ -116,6 +116,7 @@ class DorisRinex:
         return self
 
     def __next__(self):
+        # print("called next ...")
         line = self.stream.readline()
         if not line: raise StopIteration
         assert line[0] == '>'
@@ -123,6 +124,7 @@ class DorisRinex:
         data_block['epoch'] = self.resolve_date(line[2:31])
         data_block['flag'] = int(line[31:34])
         data_block['num_beacons'] = int(line[34:37])
+        # print(f"basic info {data_block['epoch'].strftime("%Y-%m-%d %H:%M:%S.%f")}, {data_block['flag']}, {data_block['num_beacons']}")
         try:
             data_block['clock_offset'] = float(line[42:56])
         except:
