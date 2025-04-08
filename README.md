@@ -1,18 +1,50 @@
 # AcademicSoftware
 
-## Installation
+## Installation of `dsoclasses` module
 
-Building the project is handled by [pip](https://packaging.python.org/en/latest/guides/installing-using-linux-tools/) and 
-[hatch](https://hatch.pypa.io/latest/). 
+This guide walks you through installing the [AcademicSoftware](https://github.com/DSOlab/AcademicSoftware) Python module from source using [Hatch](https://hatch.pypa.io/).
 
-Steps:
 
-*  make sure you have Hatch installed; if not, you can install it via `pip install hatch`
-*  go to the top-level directory (i.e. where the `pyproject.toml` file is located) and run: `hatch build`. This will create a `dist/` directory with the build artifacts (such as a `.whl` file). 
-*  then, you can install the project using: `pip install dist/dsoacademicsoftware-0.1.2-py3-none-any.whl`; note that the exact name of the file may differ depending on version.
-*  once installed, you can test if the executable works by running it from the command line, i.e. `dso_groundtrack --help`.
+0. Prerequisites
+---
 
-### Install in Editable Mode
+Make sure your system has the following installed:
+
+- Python 3.8 or higher
+- `git`, `pip`, and optionally `venv`
+
+1. Clone the repository
+---
+
+```bash
+git clone https://github.com/DSOlab/AcademicSoftware.git
+cd AcademicSoftware
+```
+
+2. Create a Virtual Environment (Optional)
+---
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+3. Install  [Hatch](https://hatch.pypa.io/)
+---
+
+```bash
+pip install hatch
+```
+
+4. Build and Install the package
+---
+
+```bash
+hatch build
+pip install dist/*.whl
+```
+
+### Install in Editable Mode (Optional)
 
 Editable mode allows you to make changes to your project and have them reflected 
 immediately without having to reinstall it every time. This is great for development.
@@ -20,9 +52,4 @@ immediately without having to reinstall it every time. This is great for develop
 To install in editable mode, run the following command from the root of the 
 project (where the `pyproject.toml` is located): `pip install -e .`
 
-## List of programs
 
-* dso_groundtrack
-* dso_skyplot
-* dso_orbit3d
-* dso_sp32elements

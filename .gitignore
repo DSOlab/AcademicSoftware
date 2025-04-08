@@ -1,6 +1,9 @@
 # no temporaries of Vim
 *.swp
 
+# no data folder
+data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
