@@ -5,15 +5,14 @@
 This guide walks you through installing the [AcademicSoftware](https://github.com/DSOlab/AcademicSoftware) Python module from source using [Hatch](https://hatch.pypa.io/).
 
 
-0. Prerequisites
----
+### 0. Prerequisites
 
 Make sure your system has the following installed:
 
 - Python 3.8 or higher
 - `git`, `pip`, and optionally `venv`
 
-1. Clone the repository
+### 1. Clone the repository
 ---
 
 ```bash
@@ -21,7 +20,7 @@ git clone https://github.com/DSOlab/AcademicSoftware.git
 cd AcademicSoftware
 ```
 
-2. Create a Virtual Environment (Optional)
+### 2. Create a Virtual Environment (Optional)
 ---
 
 ```bash
@@ -29,14 +28,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-3. Install  [Hatch](https://hatch.pypa.io/)
+### 3. Install  [Hatch](https://hatch.pypa.io/)
 ---
 
 ```bash
 pip install hatch
 ```
 
-4. Build and Install the package
+### 4. Build and Install the package
 ---
 
 ```bash
