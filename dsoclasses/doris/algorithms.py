@@ -1,7 +1,7 @@
 """ F0, aka USO frequency in [Hz]. """
 USO_F0 = 5e6;
 
-def beacon_nominal_frequency(shift_factor: int) -> tuple[float, float]
+def beacon_nominal_frequency(shift_factor: int) -> tuple[float, float]:
     """ 
     Compute the S1 and U2 (aka 2 GHz and 400 MHz) nominal frequencies
     for a DORIS beacon.
