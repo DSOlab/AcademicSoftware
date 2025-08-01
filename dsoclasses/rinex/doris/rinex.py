@@ -21,6 +21,7 @@ class DorisRinex:
     def parse_header(self, fn):
         self.beacons = []
         self.time_ref_beacons = []
+        self.filename = fn
         with open(fn, 'r') as fin:
             line  = fin.readline()
             self.version = float(line[0:9])
