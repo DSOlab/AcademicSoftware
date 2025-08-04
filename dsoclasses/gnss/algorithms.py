@@ -13,7 +13,7 @@ def geometric_range(rsta, rsat):
 
 
 def sat_at_emission_time(
-    rsta, t_reception, interpolator, sat, tolerance=(0.1, 0.1, 0.1)
+    rsta, t_reception, sp3_interpolator, sat, tolerance=(0.1, 0.1, 0.1)
 ):
     """Compute and return the satellite position at signal emission time.
     Parameters:
@@ -38,11 +38,7 @@ def sat_at_emission_time(
     t_emission = t_reception
     # get satellite coordinates at t, using the interpolator
     # x, y, z, clk = interpolator.sat_at(sat, t_emission)
-    sig = inspect.signature(interpolator.sat_at)
-    if len(sig.parameters) == 2:
-        x, y, z, c = interpolator.sat_at(t_emission)
-    elif len(sig.parameters) == 3 and sat is not None:
-        x, y, z, c = interpolator.sat_at(sat, t_emission)
+    x, y, z, c = sp3_interpolator.sat_at(sat, t_emission)
 
     count_it = 0
     while count_it < MAX_ITERATIONS:
@@ -50,12 +46,7 @@ def sat_at_emission_time(
         r = geometric_range((x, y, z), rsta)
         dt = r / gs.C
         t_emission = t_reception - fsec2asec(dt)
-        # can't find a better way!
-        sig = inspect.signature(interpolator.sat_at)
-        if len(sig.parameters) == 2:
-            xnew, ynew, znew, clk = interpolator.sat_at(t_emission)
-        elif len(sig.parameters) == 3 and sat is not None:
-            xnew, ynew, znew, clk = interpolator.sat_at(sat, t_emission)
+        xnew, ynew, znew, clk = sp3_interpolator.sat_at(sat, t_emission)
         if np.any(
             np.greater_equal(
                 np.abs(np.array((xnew, ynew, znew)) - np.array((x, y, z))),

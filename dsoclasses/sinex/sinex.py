@@ -232,20 +232,15 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
     for site in site_list:
         result[site] = {}
         for cmp in ["X", "Y", "Z"]:
-            # try:
-            #    print("--> ok0")
-            x0, t0 = get_site_crd(site, "STA" + cmp, epoch)
-            #    print("--> ok1")
-            vx, tv = get_site_crd(site, "VEL" + cmp, epoch)
-            #    print("--> ok2")
-            dt_years = (epoch - t0).days / 365.25
-            #    print("--> ok3")
-            result[site][cmp] = x0 + vx * dt_years
-            #    print("--> ok4")
-            # except:
-            #    print(
-            #        f"Warning! Failed finding valid coordinates ({cmp}) for site {site} at {epoch.strftime("%Y-%m-%d %H:%M:%S")}"
-            #    )
+            try:
+                x0, t0 = get_site_crd(site, "STA" + cmp, epoch)
+                vx, tv = get_site_crd(site, "VEL" + cmp, epoch)
+                dt_years = (epoch - t0).days / 365.25
+                result[site][cmp] = x0 + vx * dt_years
+            except:
+                print(
+                    f"Warning! Failed finding valid coordinates ({cmp}) for site {site} at {epoch.strftime("%Y-%m-%d %H:%M:%S")}"
+                )
     # remove sites with no coordinates
     result = {k: v for k, v in result.items() if v}
 

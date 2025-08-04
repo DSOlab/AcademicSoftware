@@ -89,18 +89,30 @@ class OrbitInterpolator:
             self._last_start = -1
             self._last_stop = -1
 
+        # if all clock values are np.nan, clear the list
+        if np.all(np.isnan(self._c)):
+            self._c = []
+
     def create_nonpoly_interpolators(self, start, stop, tarray=None):
         tarray = self._t if tarray is None else tarray
         if self._type == "CubicSpline":
             xspl = CubicSpline(tarray[start:stop], self._x[start:stop])
             yspl = CubicSpline(tarray[start:stop], self._y[start:stop])
             zspl = CubicSpline(tarray[start:stop], self._z[start:stop])
-            cspl = CubicSpline(tarray[start:stop], self._c[start:stop])
+            cspl = (
+                CubicSpline(tarray[start:stop], self._c[start:stop])
+                if self._c != []
+                else None
+            )
         elif self._type == "PchipInterpolator":
             xspl = PchipInterpolator(tarray[start:stop], self._x[start:stop])
             yspl = PchipInterpolator(tarray[start:stop], self._y[start:stop])
             zspl = PchipInterpolator(tarray[start:stop], self._z[start:stop])
-            cspl = PchipInterpolator(tarray[start:stop], self._c[start:stop])
+            cspl = (
+                PchipInterpolator(tarray[start:stop], self._c[start:stop])
+                if self._c != []
+                else None
+            )
         return xspl, yspl, zspl, cspl
 
     def find_interval(self, t, tarray=None):
@@ -144,7 +156,11 @@ class OrbitInterpolator:
             x = np.interp(mjd, tarray[start:stop], self._x[start:stop])
             y = np.interp(mjd, tarray[start:stop], self._y[start:stop])
             z = np.interp(mjd, tarray[start:stop], self._z[start:stop])
-            c = np.interp(mjd, tarray[start:stop], self._c[start:stop])
+            c = (
+                np.interp(mjd, tarray[start:stop], self._c[start:stop])
+                if self._c != []
+                else np.nan
+            )
             return x, y, z, c
 
         # non-polynomial interpolation
@@ -153,7 +169,12 @@ class OrbitInterpolator:
             self._xspl, self._yspl, self._zspl, self._cspl = (
                 self.create_nonpoly_interpolators(start, stop, tarray)
             )
-        return self._xspl(mjd), self._yspl(mjd), self._zspl(mjd), self._cspl(mjd)
+        return (
+            self._xspl(mjd),
+            self._yspl(mjd),
+            self._zspl(mjd),
+            self._cspl(mjd) if self._c != [] else np.nan,
+        )
 
 
 class Sp3Interpolator:
@@ -171,6 +192,7 @@ class Sp3Interpolator:
         sp3 = Sp3(sp3fn)
         self._time_sys = sp3.time_sys
         data = sp3.get_system_pos(sat_systems, True)
+
         # get the date array, both in mjd an python datetime
         self._tpyd = []
         self._tmjd = []
@@ -179,6 +201,7 @@ class Sp3Interpolator:
             self._tpyd.append(k)
             if len(self._tmjd) >= 2:
                 assert self._tmjd[-1] > self._tmjd[-2]
+
         # for each satellite, create an OrbitInterpolator instance
         self._interpolators = {}
         for sat in sp3.sat_ids:
@@ -189,8 +212,8 @@ class Sp3Interpolator:
                     interval_in_sec,
                     min_data_pts,
                     itype,
-                    True,
-                    False,
+                    True,  # include clock
+                    False,  # owns t
                     exclude_missing_clock_values,
                     exclude_flag_events,
                 )
