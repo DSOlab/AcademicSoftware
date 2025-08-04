@@ -1,6 +1,7 @@
 #! /usr/bin/python
 
 import sys
+import datetime
 from dsoclasses.sinex import sinex
 
 snx = sinex.Sinex(sys.argv[1])
@@ -22,3 +23,6 @@ print(l)
 # print(l)
 l = snx.solution_estimate(['DIOA', 'DIOB', 'DYNG'])
 print(l)
+
+res = sinex.extract_sinex_coordinates(sys.argv[1], ['DIOA', 'DIOB', 'DYNG'], datetime.datetime(2024, 1, 1))
+print(res)
