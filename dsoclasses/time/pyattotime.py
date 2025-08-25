@@ -17,37 +17,65 @@ def at2pt(at):
 
 _ATTO_PER_SEC = 10**18
 _ATTO_PER_NS = 10**9
+_NS_PER_SEC   = 10**9
 
-
-def datetime_to_attoseconds(dt: datetime) -> int:
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-    ns = np.datetime64(dt, "ns").astype("int64")
-    sec = int(ns // 1_000_000_000)
-    rem_ns = int(ns - sec * 1_000_000_000)
+def datetime_to_attoseconds(dt: datetime.datetime) -> int:
+    ns = np.datetime64(dt, "ns").astype("int64")  # exact integer ns since epoch
+    sec = int(ns // _NS_PER_SEC)
+    rem_ns = int(ns - sec * _NS_PER_SEC)
     return sec * _ATTO_PER_SEC + rem_ns * _ATTO_PER_NS
 
 
-def to_attoseconds(t) -> int:
-    """
-    Normalize supported time-like inputs to integer attoseconds:
-      - attotime-like objects with .to_attoseconds() / .attoseconds / .as_attoseconds()
-      - objects with (sec, asec) attributes
-      - Python datetime.datetime
-      - numpy.datetime64
-    """
+def to_attoseconds(t: Any) -> int:
+    # 1) direct attotime-style methods/props
     for attr in ("to_attoseconds", "attoseconds", "as_attoseconds", "to_asec"):
         if hasattr(t, attr):
             v = getattr(t, attr)
-            return int(v() if callable(v) else v)
+            try:
+                return int(v() if callable(v) else v)
+            except Exception:
+                pass
+
+    # 2) common field patterns
     if hasattr(t, "sec") and hasattr(t, "asec"):
         return int(t.sec) * _ATTO_PER_SEC + int(t.asec)
-    if isinstance(t, datetime):
-        return datetime_to_attoseconds(t)
+
+    # 3) attodatetime-style conversions -> try getting a regular datetime
+    for conv in ("to_datetime", "as_datetime", "datetime"):
+        if hasattr(t, conv):
+            dt = getattr(t, conv)
+            dt = dt() if callable(dt) else dt
+            if isinstance(dt, datetime.datetime):
+                return datetime_to_attoseconds(dt)
+
+    # 4) attodatetime-style components (year..second + subsecond fields)
+    if all(hasattr(t, a) for a in ("year","month","day","hour","minute","second")):
+        base = datetime.datetime(int(t.year), int(t.month), int(t.day),
+                            int(t.hour), int(t.minute), int(t.second))
+        asec = datetime_to_attoseconds(base)
+        # add microseconds / nanoseconds / attoseconds if present
+        if hasattr(t, "microsecond"):   asec += int(getattr(t, "microsecond")) * (10**12)
+        if hasattr(t, "microseconds"):  asec += int(getattr(t, "microseconds")) * (10**12)
+        if hasattr(t, "nanosecond"):    asec += int(getattr(t, "nanosecond"))   * (10**9)
+        if hasattr(t, "nanoseconds"):   asec += int(getattr(t, "nanoseconds"))  * (10**9)
+        if hasattr(t, "attosecond"):    asec += int(getattr(t, "attosecond"))
+        if hasattr(t, "attoseconds"):   asec += int(getattr(t, "attoseconds"))
+        return asec
+
+    # 5) numpy.datetime64
     if isinstance(t, np.datetime64):
         ns = np.datetime64(t, "ns").astype("int64")
         return int(ns) * _ATTO_PER_NS
-    raise TypeError("Unsupported time type")
+
+    # 6) python datetime
+    if isinstance(t, datetime.datetime):
+        return datetime_to_attoseconds(t)
+
+    # 7) numeric seconds
+    if isinstance(t, (int, float, np.integer, np.floating)):
+        return int(round(float(t) * _ATTO_PER_SEC))
+
+    raise TypeError(f"Unsupported time type: {t.__class__.__module__}.{t.__class__.__qualname__}  repr={t!r}")
 
 
 def fsec2asec(fsec):
