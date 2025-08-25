@@ -4,6 +4,8 @@ import sys
 import math
 import numpy as np
 from dsoclasses.geodesy.transformations import geodetic2lvlh, car2ell
+from dsoclasses.sinex.dpod import dpod_freq_corr
+from dsoclasses.time.calmjd import cal2fmjd
 
 
 def parse_sinex_date(dstr):
@@ -206,7 +208,7 @@ class Sinex:
         return sta_list_out_extra
 
 
-def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=False):
+def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=False, dpod_freq_corr_fn=None):
     # if epoch is an attotime, we must convert it to a native datetime instance
     if isinstance(epoch, attotime.attodatetime):
         epoch = datetime.datetime(*epoch.timetuple()[:6])
@@ -225,7 +227,7 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
         for entry in sdct:
             if entry["code"] == site and entry["parameter_type"] == parameter_type:
                 if entry["start"] <= valid_at and entry["stop"] >= valid_at:
-                    return entry["value"], entry["epoch"]
+                    return entry["value"], entry["epoch"], entry["solution_id"]
         return None
 
     result = {}
@@ -233,10 +235,15 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
         result[site] = {}
         for cmp in ["X", "Y", "Z"]:
             try:
-                x0, t0 = get_site_crd(site, "STA" + cmp, epoch)
-                vx, tv = get_site_crd(site, "VEL" + cmp, epoch)
+                x0, t0, solnp = get_site_crd(site, "STA" + cmp, epoch)
+                vx, tv, solnv = get_site_crd(site, "VEL" + cmp, epoch)
+                assert solnp == solnv
                 dt_years = (epoch - t0).days / 365.25
                 result[site][cmp] = x0 + vx * dt_years
+                if 'soln' in result[site]: 
+                    assert result[site]['soln'] == solnp
+                else:
+                    result[site]['soln'] = solnp
             except:
                 print(
                     f"Warning! Failed finding valid coordinates ({cmp}) for site {site} at {epoch.strftime("%Y-%m-%d %H:%M:%S")}"
@@ -266,5 +273,23 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
             result[site]["X"] = xyz[0]
             result[site]["Y"] = xyz[1]
             result[site]["Z"] = xyz[2]
+
+    if dpod_freq_corr_fn:
+        frq = dpod_freq_corr(dpod_freq_corr_fn, site_list)
+        for site, crd in result.items():
+            if site in frq:
+                for entry in frq[site]:
+                    if int(entry['soln']) == int(crd['soln']):
+                        freq = entry['freq']
+                        doy = int(epoch.strftime('%j'))
+                        fmjd = cal2fmjd(epoch)
+                        fdoy = doy + (int(fmjd)-fmjd)
+                        result[site]["X"] += (np.cos(2.*np.pi*fdoy/freq)*entry['xyz']['xcos']  + np.sin(2.*np.pi*fdoy/freq)*entry['xyz']['xsin'])*1e-3 
+                        result[site]["Y"] += (np.cos(2.*np.pi*fdoy/freq)*entry['xyz']['ycos']  + np.sin(2.*np.pi*fdoy/freq)*entry['xyz']['ysin'])*1e-3 
+                        result[site]["Z"] += (np.cos(2.*np.pi*fdoy/freq)*entry['xyz']['zcos']  + np.sin(2.*np.pi*fdoy/freq)*entry['xyz']['zsin'])*1e-3 
+                    # else:
+                    #     print(f'no match, will not apply frequency {entry["freq"]}')
+            else:
+                print(f'Note: Failed finding {site} in dpod frequency corrections file! No corrections applied.')
 
     return result
