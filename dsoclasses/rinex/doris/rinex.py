@@ -127,6 +127,9 @@ class DorisRinex:
         """E.g. given "DIOB" it will return "D21" """
         return next(b["num"] for b in self.beacons if b["id"] == site_name)
 
+    def kfactor(self, site_name):
+        return next(b["freqshift"] for b in self.beacons if b["id"] == site_name)
+
     class DataBlock:
 
         def __init__(self, dct):
