@@ -184,6 +184,10 @@ class SiteVmf3:
         d = self.vmf3(site_name, site_lat, site_lon, el, t)
         return d["zhd"] * d["mfh"] + d["zwd"] * d["mfw"]
 
+    def tropo_dealy_info(self, site_name, site_lat, site_lon, el, t):
+        d = self.vmf3(site_name, site_lat, site_lon, el, t)
+        return d
+
 
 def _legendre_VW(x: float, y: float, z: float, nmax: int = 12):
     """Recurrence for (fully normalized) V/W as in MATLAB vmf3.m."""
