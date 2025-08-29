@@ -180,7 +180,7 @@ class SiteVmf3:
         site_dct["mfw"] = mfw
         return site_dct
 
-    def tropo_dealy(self, site_name, site_lat, site_lon, el, t):
+    def tropo_delay(self, site_name, site_lat, site_lon, el, t):
         d = self.vmf3(site_name, site_lat, site_lon, el, t)
         return d["zhd"] * d["mfh"] + d["zwd"] * d["mfw"]
 
