@@ -36,6 +36,7 @@ dso_orbit3d       = "bin.orbit3d:main"
 dso_sp32elements  = "bin.sp32elements:main"
 dso_sp3interpolate= "bin.sp3_interpolate:main"
 dso_pp            = "bin.pp:main"
+argossimulator    = "bin.argossimulator2:main"
 
 # Specify the packages/modules
 [tool.hatch.build]
