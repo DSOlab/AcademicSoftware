@@ -127,6 +127,10 @@ class DorisRinex:
         """E.g. given "DIOB" it will return "D21" """
         return next(b["num"] for b in self.beacons if b["id"] == site_name)
 
+    def id2name(self, site_num):
+        """Reverse operation to name2id """
+        return next(b["id"] for b in self.beacons if b["num"] == site_num)
+
     def kfactor(self, site_name):
         return next(b["freqshift"] for b in self.beacons if b["id"] == site_name)
 
