@@ -88,6 +88,9 @@ class DorisRinex:
                     self.num_stations = int(line[0:6].strip())
                 elif line[60:].strip() == "# TIME REF STATIONS":
                     self.num_ref_stations = int(line[0:6].strip())
+                elif line[60:].strip() == "L2 / L1 DATE OFFSET":
+                    assert line[0] == 'D'
+                    self.l2l1_date_offset = float(line[1:40].strip()) * 1e-6  # seconds
                 elif line[60:].strip() == "TIME REF STATION":
                     num = line[0:3]
                     bias = float(line[5:21].strip())
