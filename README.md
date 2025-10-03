@@ -53,6 +53,11 @@ immediately without having to reinstall it every time. This is great for develop
 To install in editable mode, run the following command from the root of the 
 project (where the `pyproject.toml` is located): `pip install -e .`
 
+### Updating
+Run the following command from the root of the 
+project (where the `pyproject.toml` is located): `git pull origin`
+
+
 ## Jupyter Notebooks
 
 The notebooks are placed under the `JupiterLab` folder. Hence, assuming jupyterlab is available on your system (if not, `pip install jupyterlab` would do it) the following command should 
