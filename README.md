@@ -8,8 +8,7 @@ To use the Notebooks, you need to install the core python module.
 
 ## Installation of `dsoclasses` module
 
-This guide walks you through installing the [AcademicSoftware](https://github.com/DSOlab/AcademicSoftware) Python module from source using [Hatch](https://hatch.pypa.io/).
-
+This guide walks you through installing the `dsoclasses` Python module from source.
 
 0. Prerequisites
 
@@ -21,48 +20,60 @@ Make sure your system has the following installed:
  1. Clone the repository
 
 ```bash
-git clone https://github.com/DSOlab/AcademicSoftware.git
-cd AcademicSoftware
+git clone https://github.com/idsdorisorg/DORISdays2025.git
+cd DORISdays2025
 ```
 
-2. Create a Virtual Environment (Optional)
+2. Create a Virtual Environment
+
+**Note that depending on your OS and setup, you may need to replace `python` with `python3`.**
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 ```
 
-3. Install  [Hatch](https://hatch.pypa.io/)
+For **Windows** users the above should be replaced with:
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+3. Upgrade build tools
+
+**Note that depending on your OS and setup, you may need to replace `pip` with `pip3`.**
 
 ```bash
-pip install hatch
+python -m pip install --upgrade pip
 ```
 
 4. Build and Install the package
 
 ```bash
-hatch build
-pip install dist/*.whl
+pip install -e .
 ```
 
-### Install in Editable Mode (Optional)
-
-Editable mode allows you to make changes to your project and have them reflected 
-immediately without having to reinstall it every time. This is great for development.
-
-To install in editable mode, run the following command from the root of the 
-project (where the `pyproject.toml` is located): `pip install -e .`
-
 ### Updating
-Run the following command from the root of the 
-project (where the `pyproject.toml` is located): `git pull origin`
+
+To fetch latest changes and/or additions to the online repository, you will need to 
+run the following command from the root of the project (where the `pyproject.toml` is 
+located): `git pull origin`. No other step should be needed.
 
 
 ## Jupyter Notebooks
 
-The notebooks are placed under the `JupiterLab` folder. Hence, assuming jupyterlab is available on your system (if not, `pip install jupyterlab` would do it) the following command should 
-launch a local web server and open JupyterLab in your browser `jupyter lab --notebook-dir=JupiterLab/` (from the top-level directory).
+The notebooks are placed under the `JupyterLab` folder. Hence, assuming jupyterlab 
+is available on your system (if not, `pip install jupyterlab` would do it) the following 
+command should launch a local web server and open JupyterLab in your browser 
+`jupyter lab --notebook-dir=JupyterLab/` (from the top-level directory).
 
 ## A note on data
 
-The notebooks use data to showcase different analysis tasks. The data though are not distributed with the project, and you'll have to download them youself. You can conviniently place them at a `data/` top-level directory, or anywhere else you see fit. The actual filenames that appear on the notebooks are not (supposed to be) binding; its up to the user selection.
+This repository comes with a few data files that are needed to run the examples presented in 
+the notebooks. Alternate or updated data should be seeked at the dedicated web repositories.
+
+## Bugs & Troubleshooting
+
+If you encounter any problems, please contact:
+* Xanthos Papanikolaou xanthos@mail.ntua.gr,
+* Prof. Dimitris Anastasiou danastasiou@mail.ntua.gr
