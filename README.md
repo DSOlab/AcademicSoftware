@@ -20,8 +20,8 @@ Make sure your system has the following installed:
  1. Clone the repository
 
 ```bash
-git clone https://github.com/idsdorisorg/DORISdays2025.git
-cd DORISdays2025
+git clone https://github.com/DSOlab/AcademicSoftware.git
+cd AcademicSoftware
 ```
 
 2. Create a Virtual Environment
