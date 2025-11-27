@@ -95,9 +95,24 @@ class GnssRinex:
                 elif line[60:].strip() == "TIME OF LAST OBS":
                     self.time_last_obs = self.resolve_date(line[0:44])
                     self.time_last_obs_sys = line[44:60].strip()
+                elif line[60:].strip() == "GLONASS SLOT / FRQ #":
+                    try:
+                        num_rsats = int(line[0:4])
+                        self.glo_slots = {}
+                    except:
+                        pass
+                    pflst = line[4:60].split()
+                    self.glo_slots |= {sat: int(k) for sat, k in zip(pflst[0::2], pflst[1::2])}
                 else:
                     pass
                 line = fin.readline()
+
+    def glonass_slot(self, prn):
+        try:
+            return self.glo_slots[prn]
+        except:
+            pass
+        raise RuntimeError(f'Failed finding slot nr for GLONASS satellite {prn}')
 
     def approx_cartesian(self): return [self.xapprox, self.yapprox, self.zapprox]
 

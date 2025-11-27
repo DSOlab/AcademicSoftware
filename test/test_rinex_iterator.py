@@ -4,6 +4,9 @@ import sys
 from dsoclasses.rinex.gnss.rinex import GnssRinex
 
 rnx = GnssRinex(sys.argv[1])
+print(rnx.glo_slots)
+sys.exit(9)
+
 # rit = iter(rnx)
 # print( next(rit).satellite('C02') )
 # next(rit)

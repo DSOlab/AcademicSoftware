@@ -9,6 +9,14 @@ GAL_E5b_FREQ = 1207.140
 GAL_E5_FREQ  = 1191.795 # (E5a+E5b)
 GAL_E6_FREQ  = 1278.75
 
+GLO_G1_FREQ = 1602. #+k*9/16
+GLO_G2_FREQ = 1246. #+k*7/16
+GLO_G3_FREQ = 1202.025
+def glonass_sat_freqs(slot_nr):
+    k = slot_nr
+    return GLO_G1_FREQ+(k*(9./16.)), GLO_G2_FREQ+(k*(7./16.)), GLO_G3_FREQ
+
+
 # Speed of light m/sec
 C = 299792458e0
 
