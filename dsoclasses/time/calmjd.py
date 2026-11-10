@@ -10,45 +10,21 @@ mtab = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 
 def cal2mjd(t):
-    """Transform a calendar date to MJD and seconds of day.
+    """Return (integer MJD, float seconds-of-day) for any supported GNSS epoch.
 
-    The input parameter t, can be either
-    * a native python datetime instance, or
-    * an attodatetime instance
+    Epoch normalization is shared with RINEX, SP3 and signal propagation.
+    Doing the day split in integer attoseconds correctly handles both dates
+    before 1970 and attodatetime's fractional nanoseconds. Only the final
+    seconds-of-day is converted to float because the historical API returns
+    floats, rather than claiming attosecond precision for an MJD float.
 
-    Return:
-        mjd    -> the (integral) MJD and
-        secday -> the (fractional) seconds of day
+    This is calendar conversion, NOT conversion between GNSS time scales.
     """
-    try:
-        secday = t.nanosecond * 1e-9
-    except:
-        secday = 0.0
-    secday += float(t.hour * 3600) + (
-        float(t.minute * 60) + (float(t.second) + float(t.microsecond) * 1e-6)
-    )
+    from dsoclasses.time.pyattotime import to_attoseconds
 
-    yr = int(t.year)
-    mn = int(t.month)
-    dm = int(t.day)
-
-    assert mn >= 1 and mn <= 12
-    leap = int((mn == 2) and not (yr % 4) and (yr % 100 or not (yr % 400)))
-    assert not ((dm < 1) or (dm > (mtab[mn - 1] + leap)))
-
-    # took a while to debug this ... negative integer division is different from C
-    my = int((mn - 14) / 12)
-    iypmy = yr + my
-
-    mjd = (
-        (1461 * (iypmy + 4800)) // 4
-        + (367 * (mn - 2 - 12 * my)) // 12
-        - (3 * ((iypmy + 4900) // 100)) // 4
-        + dm
-        - 2432076
-    )
-
-    return mjd, secday
+    asec_per_day = 86400 * 10**18
+    days, remainder = divmod(to_attoseconds(t), asec_per_day)
+    return 40587 + days, remainder / 10**18
 
 
 def cal2fmjd(t):

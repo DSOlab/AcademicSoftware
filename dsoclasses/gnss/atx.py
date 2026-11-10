@@ -1,180 +1,244 @@
-import datetime
-import attotime
+"""Receiver antenna phase-centre corrections from ANTEX 1.4 files.
+
+All public PCO/PCV values are returned in **metres**. ANTEX stores them in
+millimetres. Zenith angles in ANTEX are degrees; elevations in this API are
+radians. The helper handles NOAZI (azimuth-independent) patterns only.
+"""
+from __future__ import annotations
+
 import math
-import sys
+from pathlib import Path
+
 import numpy as np
 
-
-# System Frequencies as in
-# https://files.igs.org/pub/data/format/antex14.txt
-"""
- GPS:     'G01' - L1             
-          'G02' - L2             
-          'G05' - L5             
- GLONASS: 'R01' - G1             
-          'R02' - G2             
- Galileo: 'E01' - E1             
-          'E05' - E5a            
-          'E07' - E5b            
-          'E08' - E5 (E5a+E5b)   
-          'E06' - E6             
- Compass: 'C01' - E1             
-          'C02' - E2             
-          'C07' - E5b            
-          'C06' - E6             
- QZSS:    'J01' - L1             
-          'J02' - L2             
-          'J05' - L5             
-          'J06' - LEX            
- SBAS:    'S01' - L1             
-          'S05' - L5
-"""
+# ANTEX frequency identifiers differ from PRNs. In particular GPS L5 is G05.
 _ATX_FREQS = {
-    'G': {'L1': 'G01', 'L2': 'G02', 'L5': 'G04'},
+    'G': {'L1': 'G01', 'L2': 'G02', 'L5': 'G05'},
     'R': {'G1': 'R01', 'G2': 'R02', 'L1': 'R01', 'L2': 'R02'},
     'E': {'E1': 'E01', 'E5a': 'E05', 'E5b': 'E07', 'E5(E5a+E5b)': 'E08', 'E6': 'E06'},
     'C': {'E1': 'C01', 'E2': 'C02', 'E5b': 'C07', 'E6': 'C06'},
     'J': {'L1': 'J01', 'L2': 'J02', 'L5': 'J05', 'LEX': 'J06'},
-    'S': {'L1': 'S01', 'L5': 'S05'}
+    'S': {'L1': 'S01', 'L5': 'S05'},
 }
-def _to_atx_freq(sys, freq):
-    fstr = None
+
+
+def _to_atx_freq(system, frequency):
     try:
-        fstr = _ATX_FREQS[sys.upper()[0]][freq]
-    except:
-        pass
-    if not fstr:
-        raise RuntimeError(f'Failed to match given SYS/FREQ={sys}{freq} to a valid atx frequency')
-    return fstr
+        return _ATX_FREQS[system.upper()[0]][frequency]
+    except (IndexError, KeyError, AttributeError) as exc:
+        raise ValueError(f'Unknown ANTEX frequency {system!r} / {frequency!r}') from exc
+
 
 class ReceiverAntennaPcv:
+    """Antenna NEU offsets and NOAZI variation curves in SI metres."""
     def __init__(self, antenna):
         self.antenna = antenna
         self.pcv = {}
-    def add_freq(self, freq, neu, z1z2dz, vals):
-        d = {'neu': neu, 'z1z2dz': z1z2dz, 'pcv': vals}
-        self.pcv[freq] = d
-    
-    # def pco(self, freq): return self.pcv[freq]['neu']
-    # def pco(self, sys, freq): return self.pco(_to_atx_freq(sys, freq))
-    def pco(self, *args):
-        if len(args) == 1:
-            (freq,) = args
-            return self.pcv[freq]['neu']
-        elif len(args) == 2:
-            sys, freq = args
-            return self.pcv[_to_atx_freq(sys, freq)]['neu']
-        else:
-            raise RuntimeError("ReceiverAntennaPcv.pco expects 1 or 2 arguments")
 
-    def _pcv_hgt(self, freq, el): 
-        za = np.pi / 2. - el
-        assert za >= 0e0 and za <= np.pi / 2.
-        cp = int((np.degrees(za) - self.pcv[freq]['z1z2dz'][0]) / self.pcv[freq]['z1z2dz'][2])
-        np1 = cp + 1
-        x0 = self.pcv[freq]['z1z2dz'][0] + cp * self.pcv[freq]['z1z2dz'][2]
-        x1 = x0 + self.pcv[freq]['z1z2dz'][2]
-        x  = np.degrees(za)
-        assert np.degrees(za) >= x0 and np.degrees(za) < x1
-        y0 = self.pcv[freq]['pcv'][cp]
-        y1 = self.pcv[freq]['pcv'][np1]
-        return (y0*(x1-x) + y1*(x-x0)) / (x1-x0)
-    def pcv_hgt(self, *args):
+    def add_freq(self, freq, neu, z1z2dz, vals):
+        """Add one frequency; caller passes offsets/variations in metres."""
+        offset = np.asarray(neu, dtype=float)
+        angles = np.asarray(z1z2dz, dtype=float)
+        variation = np.asarray(vals, dtype=float)
+        if offset.shape != (3,) or angles.shape != (3,) or variation.ndim != 1:
+            raise ValueError(f'Invalid antenna calibration dimensions for {freq}')
+        z1, z2, dz = angles
+        if not np.all(np.isfinite(offset)) or not np.all(np.isfinite(variation)):
+            raise ValueError(f'Non-finite antenna calibration for {freq}')
+        if dz <= 0 or z2 < z1 or not np.all(np.isfinite(angles)):
+            raise ValueError(f'Invalid zenith-angle grid for {freq}')
+        expected = int(round((z2 - z1) / dz)) + 1
+        if expected != len(variation) or not np.isclose(z1 + (expected - 1) * dz, z2):
+            raise ValueError(f'Wrong NOAZI sample count for {freq}: expected {expected}, got {len(variation)}')
+        self.pcv[freq] = {'neu': offset, 'z1z2dz': angles, 'pcv': variation}
+
+    @staticmethod
+    def _resolve_freq(args):
+        if len(args) == 1:
+            return args[0]
         if len(args) == 2:
-            freq, el = args
-            return self._pcv_hgt(freq, el)
+            return _to_atx_freq(*args)
+        raise TypeError('Frequency should be a code or a system/frequency pair')
+
+    def pco(self, *args):
+        """Return phase-centre offset as [north, east, up] in metres."""
+        return self.pcv[self._resolve_freq(args)]['neu'].copy()
+
+    def pcv_hgt(self, *args):
+        """Interpolate phase-centre variation [m] at elevation [rad].
+
+        Exact grid endpoints are valid, including the zenith itself. We do
+        not silently extrapolate outside the ANTEX zenith-angle coverage.
+        """
+        if len(args) == 2:
+            freq, elevation = args
         elif len(args) == 3:
-            sys, freq, el = args
-            return self._pcv_hgt(_to_atx_freq(sys, freq), el)
+            system, frequency, elevation = args
+            freq = _to_atx_freq(system, frequency)
         else:
-            raise RuntimeError("ReceiverAntennaPcv.pcv_hgt expects 2 or 3 arguments")
+            raise TypeError('pcv_hgt expects (freq, elevation) or (system, freq, elevation)')
+        record = self.pcv[freq]
+        if not math.isfinite(float(elevation)):
+            raise ValueError('Elevation must be finite')
+        za = 90.0 - math.degrees(elevation)
+        z1, z2, dz = record['z1z2dz']
+        if za < z1 - 1e-9 or za > z2 + 1e-9:
+            raise ValueError(f'Elevation outside ANTEX coverage for {freq} (zenith {z1}..{z2} deg)')
+        knots = z1 + np.arange(len(record['pcv'])) * dz
+        return float(np.interp(np.clip(za, z1, z2), knots, record['pcv']))
+
 
 class Atx:
-
-    def parse_header(self, fn):
-        with open(fn, 'r') as fin:
-            line  = fin.readline()
-            self.version = float(line[0:8])
-            self.sat_sys = line[20]
-            assert self.sat_sys in ['G', 'R', 'E', 'C', 'J', 'S', 'M']
-            assert line[60:].rstrip() == 'ANTEX VERSION / SYST'
-            while line and line.strip() != "END OF HEADER":
-                if line[60:].strip() == "PCV TYPE / REFANT":
-                    self.variation_type = line[0]
-                    assert self.variation_type in ['A', 'R']
-                    if self.variation_type == 'R':
-                        print('ATX {:} holds relative PCVs; cannot handle this type of information!'.format(fn), file=sys.stderr)
-                line = fin.readline()
-            self.filename = fn
-
-
-    def __init__(self, fn): self.parse_header(fn)
+    """Read receiver NOAZI calibration blocks from an ANTEX file."""
+    def __init__(self, filename):
+        self.filename = str(Path(filename))
+        with open(self.filename, encoding='ascii', errors='replace') as stream:
+            first = stream.readline()
+            if first[60:80].strip() != 'ANTEX VERSION / SYST':
+                raise ValueError('Not an ANTEX file (missing version header)')
+            self.version = float(first[:8])
+            self.sat_sys = first[20:21]
+            self.variation_type = None
+            for line in stream:
+                label = line[60:80].strip()
+                if label == 'PCV TYPE / REFANT':
+                    self.variation_type = line[:1]
+                elif label == 'END OF HEADER':
+                    break
+            else:
+                raise ValueError('ANTEX header lacks END OF HEADER')
+            if self.variation_type != 'A':
+                raise ValueError('Only absolute antenna calibrations (PCV type A) are supported')
 
     def goto_antenna(self, antenna):
-        fin = open(self.filename, 'r')
-        antenna_found = False
-        line = fin.readline()
-        while not antenna_found and line:
-            while line and line.strip() != "START OF ANTENNA":
-                line = fin.readline()
-# found new antenna block;
-            line = fin.readline()
-            if line[0:20].strip() == antenna:
-                antenna_found = True
-                break
-            else:
-                line = fin.readline()
-        if antenna_found: return fin
-        fin.close()
+        """Compatibility method: return a stream at the requested antenna.
+
+        The *caller* must close the returned stream. ``get_noazi`` below uses
+        its own context manager and does not leave files open.
+        """
+        stream = open(self.filename, encoding='ascii', errors='replace')
+        for line in stream:
+            if line[60:80].strip() == 'START OF ANTENNA':
+                antenna_line = stream.readline()
+                if self._antenna_matches(antenna_line[:20], antenna):
+                    return stream
+        stream.close()
         return None
 
-    def _get_noazi(self, antenna, freq_list):
-        if len(antenna) < 20: antenna = "{:16s}NONE".format(antenna)
-        freqs_collected = []
-        fin = self.goto_antenna(antenna)
-        if fin is None:
-            raise RuntimeError("Failed locating antenna \'{antenna}\' in atx file {self.filename}")
+    @staticmethod
+    def _antenna_matches(file_name, requested):
+        name = file_name.strip()
+        requested = requested.strip()
+        return name == requested or (name == f'{requested:<16}NONE'.strip()
+                                     and len(requested) <= 16)
 
-        pcv = ReceiverAntennaPcv(antenna)
-        line = fin.readline()
-        while sorted(freqs_collected) != sorted(freq_list):
-            while line and line[60:].rstrip() != "START OF FREQUENCY":
-                line = fin.readline()
-                if line[60:].rstrip() == "ZEN1 / ZEN2 / DZEN":
-                    z1, z2, dz = [ float(x) for x in line[0:20].split() ]
-                elif line[60:].rstrip() == "END OF ANTENNA":
-                    print("ERROR. Failed locating requested frequencies for antenna \'{:}\'. Atx file is {:}".format(antenna, self.filename), file=sys.stderr)
-                    fin.close()
-                    return None
-# should be at the start of a new frequency
-            freq = line[3:6]
-            if freq in freq_list:
-                line = fin.readline()
-                assert line[60:].rstrip() == "NORTH / EAST / UP"
-                n, e, u = [ float(line[i*10:i*10+10])*1e-3 for i in range(3) ]
-                line = fin.readline()
-                assert line.startswith("   NOAZI")
-                ln = line[8:]
-                vals = [ float(ln[i*8:i*8+8])*1e-3 for i in range(int((z2-z1)/dz)+1) ]
-                freqs_collected.append(freq)
-                pcv.add_freq(freq, [n,e,u], [z1,z2,dz], vals)
-            line = fin.readline()
-        fin.close()
-        return pcv
-    
+    @staticmethod
+    def _read_mm_values(line):
+        """Decode an entire ANTEX NOAZI row, returning metres.
+
+        ANTEX labels on control/header records occupy columns 61--80, but
+        **NOAZI is a data record**, not an 80-column header record. Its values
+        begin in column 9 and may continue far beyond column 80 (e.g. 19
+        samples for zenith angles from 0 to 90 degrees in steps of 5 degrees).
+        Slicing at column 60 truncates a valid F8.2 field and can leave a
+        lone minus sign, causing the original ``float('-')`` exception.
+
+        The specification uses 8-character F8.2 fields. We decode those first
+        so adjacent negative numbers remain separable. For small hand-written
+        examples that omit fixed-width padding, we also accept whitespace-
+        separated values. Either way, missing/invalid and non-finite values
+        must be rejected rather than silently inserted into a calibration.
+        """
+        payload = line[8:].rstrip('\r\n')
+        if not payload.strip():
+            raise ValueError('ANTEX NOAZI row contains no calibration samples')
+
+        columns = [payload[i:i + 8].strip()
+                   for i in range(0, len(payload), 8)]
+        try:
+            mm_values = [float(value) for value in columns if value]
+        except ValueError:
+            # Tolerate simple, nonstandard test/export files while still
+            # rejecting malformed numeric tokens in the fallback below.
+            try:
+                mm_values = [float(value) for value in payload.split()]
+            except ValueError as exc:
+                raise ValueError(
+                    'ANTEX NOAZI contains an invalid millimetre value '
+                    f'in {payload!r}'
+                ) from exc
+
+        if not mm_values or not all(math.isfinite(value) for value in mm_values):
+            raise ValueError('ANTEX NOAZI contains missing or non-finite values')
+        return [value * 1e-3 for value in mm_values]
+
+    def _get_noazi(self, antenna, frequencies):
+        requested = list(dict.fromkeys(frequencies))
+        if not requested:
+            raise ValueError('At least one frequency must be requested')
+        stream = self.goto_antenna(antenna)
+        if stream is None:
+            raise LookupError(f'Antenna {antenna!r} not found in {self.filename}')
+
+        result = ReceiverAntennaPcv(antenna)
+        zenith_grid = None
+        active_freq = None
+        neu = None
+        values = []
+        try:
+            for line in stream:
+                label = line[60:80].strip()
+                if label == 'END OF ANTENNA':
+                    break
+                if label == 'ZEN1 / ZEN2 / DZEN':
+                    zenith_grid = [float(v) for v in line[:60].split()]
+                elif label == 'START OF FREQUENCY':
+                    active_freq = line[3:6]
+                    neu = None
+                    values = []
+                elif label == 'NORTH / EAST / UP' and active_freq in requested:
+                    neu = [float(line[i:i+10]) * 1e-3 for i in (0, 10, 20)]
+                elif label == 'END OF FREQUENCY':
+                    if active_freq in requested:
+                        if zenith_grid is None or neu is None:
+                            raise ValueError(f'Incomplete calibration for {active_freq} on {antenna}')
+                        result.add_freq(active_freq, neu, zenith_grid, values)
+                    active_freq = None
+                elif active_freq in requested and line.startswith('   NOAZI'):
+                    # NOAZI is a potentially very long data line; the parser
+                    # must not apply the 60-character label-field limit.
+                    values.extend(self._read_mm_values(line))
+                elif (active_freq in requested and neu is not None and values
+                      and zenith_grid is not None and not line[:8].strip()
+                      and len(values) < int(round((zenith_grid[1] - zenith_grid[0])
+                                                       / zenith_grid[2])) + 1):
+                    # Normally all NOAZI samples occupy one line. Accept
+                    # continuation lines from nonstandard writers only until
+                    # the declared grid is complete. Unlike azimuth-dependent
+                    # PCV rows, continuation lines have blank columns 1..8.
+                    # A long continuation can itself exceed column 60.
+                    values.extend(self._read_mm_values(line))
+            else:
+                raise ValueError(f'ANTEX antenna {antenna!r} lacks END OF ANTENNA')
+        finally:
+            stream.close()
+        missing = [code for code in requested if code not in result.pcv]
+        if missing:
+            raise LookupError(f'No NOAZI calibration for antenna {antenna!r}, frequencies {missing}')
+        return result
+
     def get_noazi(self, antenna, freq_list):
-        if isinstance(freq_list, list):
-            return  self._get_noazi(antenna, freq_list)
+        """Return the selected NOAZI curves; accept string, list, or map."""
+        if isinstance(freq_list, str):
+            freqs = [freq_list]
         elif isinstance(freq_list, dict):
-            # example: {"E": ['FREQ1', 'FREQ2'], 'G': [...], ...}
             freqs = []
-            for sys, fs in freq_list.items():
-                if isinstance(fs, list):
-                    for f in fs:
-                        freqs.append(_to_atx_freq(sys, f))
-                else:
-                    freqs.append(_to_atx_freq(sys, fs))
-            return self._get_noazi(antenna, freqs)
+            for system, bands in freq_list.items():
+                if isinstance(bands, str):
+                    bands = [bands]
+                freqs.extend(_to_atx_freq(system, band) for band in bands)
+        elif isinstance(freq_list, (list, tuple)):
+            freqs = list(freq_list)
         else:
-            self._get_noazi(antenna, [freq_list])
-
+            raise TypeError('freq_list must be a string, sequence or constellation map')
+        return self._get_noazi(antenna, freqs)

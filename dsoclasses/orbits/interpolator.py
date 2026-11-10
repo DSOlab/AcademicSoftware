@@ -16,59 +16,26 @@ TAI).  This module does NOT convert between time systems or apply leap seconds.
 
 from __future__ import annotations
 
-from datetime import datetime
+from bisect import bisect_left
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 from scipy.interpolate import BarycentricInterpolator, CubicSpline, PchipInterpolator
 
+from dsoclasses.time.pyattotime import Epoch, to_attoseconds, seconds_to_attoseconds
 
-_NS_PER_SECOND = 1_000_000_000
-_ATTOSECONDS_PER_NS = 1_000_000_000
+
+_ATTO_PER_SECOND = 10**18
 _METHODS = frozenset({"Linear", "Polynomial", "Barycentric", "CubicSpline", "PchipInterpolator"})
 
 
 def _as_nanoseconds(value: Any) -> int:
-    """Normalize a query time to integral nanoseconds since Unix epoch.
+    """Legacy helper; use to_attoseconds() for lossless internal arithmetic.
 
-    Python ``datetime`` and ``numpy.datetime64`` work without installing the
-    optional ``attotime`` package.  Older ``attotime``-like objects exposing
-    an attosecond value/method are supported as well.  Conversion preserves
-    nanosecond precision without subtracting two enormous float timestamps.
-
-    We reject timezone-aware ``datetime`` rather than silently converting
-    UTC to the SP3 header's time system (which may be GPS, TAI or GLO).
+    Its nanosecond return value is retained only for compatibility with
+    older importers of this private function. It is not used by interpolation.
     """
-    if isinstance(value, np.datetime64):
-        if np.isnat(value):
-            raise ValueError("NaT cannot be used as an interpolation epoch")
-        return int(value.astype("datetime64[ns]").astype("int64"))
-    if isinstance(value, datetime):
-        if value.tzinfo is not None and value.utcoffset() is not None:
-            raise ValueError("Use a timezone-naive datetime expressed in the SP3 time system")
-        return int(np.datetime64(value, "ns").astype("int64"))
-
-    # Accommodate the pre-existing attotime-style API without importing it.
-    for attr in ("to_attoseconds", "as_attoseconds", "attoseconds", "to_asec"):
-        if hasattr(value, attr):
-            item = getattr(value, attr)
-            try:
-                total = item() if callable(item) else item
-                return int(total) // _ATTOSECONDS_PER_NS
-            except (TypeError, ValueError, OverflowError):
-                pass
-    if hasattr(value, "sec") and hasattr(value, "asec"):
-        return int(value.sec) * _NS_PER_SECOND + int(value.asec) // _ATTOSECONDS_PER_NS
-    for attr in ("to_datetime", "as_datetime", "datetime"):
-        if hasattr(value, attr):
-            converter = getattr(value, attr)
-            dt = converter() if callable(converter) else converter
-            if isinstance(dt, datetime):
-                return _as_nanoseconds(dt)
-    raise TypeError(
-        "Epoch must be a datetime, numpy.datetime64, or attotime-like object; "
-        f"got {type(value).__name__}"
-    )
+    return to_attoseconds(value) // 10**9
 
 
 def flag_is_on(flags: str, selected: Sequence[str]) -> bool:
@@ -142,11 +109,11 @@ class OrbitInterpolator:
         self._itype = itype
         self._minpts = int(min_data_pts)
         self._stencil_pts = max(int(stencil_pts), self._minpts)
-        self._half_window_ns = int(interval_in_sec * _NS_PER_SECOND)
-        self._explicit_gap_ns = (
-            None if max_gap_in_sec is None else int(max_gap_in_sec * _NS_PER_SECOND)
+        self._half_window_as = seconds_to_attoseconds(interval_in_sec)
+        self._explicit_gap_as = (
+            None if max_gap_in_sec is None else seconds_to_attoseconds(max_gap_in_sec)
         )
-        self._t = np.array([_as_nanoseconds(v) for v in tarray], dtype=np.int64)
+        self._t = tuple(to_attoseconds(v) for v in tarray)
         self._x = np.asarray(x, dtype=np.float64)
         self._y = np.asarray(y, dtype=np.float64)
         self._z = np.asarray(z, dtype=np.float64)
@@ -155,43 +122,46 @@ class OrbitInterpolator:
         n = len(self._t)
         if n == 0 or any(len(series) != n for series in (self._x, self._y, self._z, self._c)):
             raise ValueError("Non-empty timestamps and equally sized x, y, z, clock arrays are required")
-        if np.any(np.diff(self._t) <= 0):
+        if any(later <= earlier for earlier, later in zip(self._t, self._t[1:])):
             raise ValueError("Satellite epochs must be unique and strictly increasing")
 
         # The position series uses a shared mask, so X/Y/Z are always fitted
         # at the same epochs.  The clock mask is independent by design.
         xyz = np.column_stack((self._x, self._y, self._z))
         pos_valid = np.all(np.isfinite(xyz), axis=1)
-        self._pos_times = self._t[pos_valid]
+        self._pos_times = tuple(t for t, valid in zip(self._t, pos_valid) if valid)
         self._positions = xyz[pos_valid]
         clock_valid = np.isfinite(self._c)
-        self._clk_times = self._t[clock_valid]
+        self._clk_times = tuple(t for t, valid in zip(self._t, clock_valid) if valid)
         self._clocks = self._c[clock_valid]
 
-        self._position_gap_ns = self._gap_limit(self._pos_times)
+        self._position_gap_as = self._gap_limit(self._pos_times)
         # The XYZ cadence is usually the best indication of the SP3 product
         # sampling rate.  Do not mistake two isolated clock corrections for a
         # valid, long-period clock time series.  Users can override the limit.
-        self._clock_gap_ns = (
-            self._position_gap_ns if self._position_gap_ns is not None
+        self._clock_gap_as = (
+            self._position_gap_as if self._position_gap_as is not None
             else self._gap_limit(self._clk_times)
         )
 
-    def _gap_limit(self, epochs: np.ndarray) -> int | None:
+    def _gap_limit(self, epochs: tuple[int, ...]) -> int | None:
         """Determine a conservative maximum bracketing gap for this series."""
-        if self._explicit_gap_ns is not None:
-            return self._explicit_gap_ns
+        if self._explicit_gap_as is not None:
+            return self._explicit_gap_as
         if len(epochs) < 2:
             return None
-        gaps = np.diff(epochs)
+        gaps = sorted(later - earlier for earlier, later in zip(epochs, epochs[1:]))
+        # Use Python integer arithmetic: absolute attoseconds overflow int64,
+        # and converting epoch values to float would erase fine resolution.
+        median = gaps[len(gaps) // 2] if len(gaps) % 2 else (
+            gaps[len(gaps) // 2 - 1] + gaps[len(gaps) // 2]) // 2
         # This automatic threshold is a *heuristic*, not a physical model.
-        # Users can supply max_gap_in_sec for strongly irregular products.
-        return 3 * int(np.median(gaps))
+        return 3 * median
 
     def _evaluate(
         self,
-        query_ns: int,
-        epochs: np.ndarray,
+        query_as: int,
+        epochs: tuple[int, ...],
         values: np.ndarray,
         *,
         gap_limit: int | None,
@@ -201,10 +171,10 @@ class OrbitInterpolator:
         Reject extrapolation, demand enough nearby valid samples, and reject
         a query which lies inside an unacceptably large observation gap.
         """
-        if not len(epochs) or query_ns < epochs[0] or query_ns > epochs[-1]:
+        if not epochs or query_as < epochs[0] or query_as > epochs[-1]:
             raise ValueError(f"No observations bracket the query for {self._satellite}")
-        insertion = int(np.searchsorted(epochs, query_ns, side="left"))
-        if insertion < len(epochs) and epochs[insertion] == query_ns:
+        insertion = bisect_left(epochs, query_as)
+        if insertion < len(epochs) and epochs[insertion] == query_as:
             # Exact available data should be returned exactly, without
             # spline roundoff and without unnecessary neighbor requirements.
             return np.asarray(values[insertion])
@@ -213,17 +183,18 @@ class OrbitInterpolator:
         if gap_limit is not None and int(epochs[insertion] - epochs[insertion - 1]) > gap_limit:
             raise ValueError(f"Observation gap too large for {self._satellite}")
 
-        in_window = (epochs >= query_ns - self._half_window_ns) & (
-            epochs <= query_ns + self._half_window_ns
-        )
-        ts = epochs[in_window]
-        ys = values[in_window]
+        # Filter the window using integral attoseconds; never cast absolute
+        # 2024-era epochs to float or numpy int64.
+        indices = [i for i, epoch in enumerate(epochs)
+                   if abs(epoch - query_as) <= self._half_window_as]
+        ts = [epochs[i] for i in indices]
+        ys = values[indices]
         if len(ts) < self._minpts:
             raise ValueError(
                 f"Insufficient nearby samples for {self._satellite}: "
                 f"found {len(ts)}, need {self._minpts}"
             )
-        if ts[0] > query_ns or ts[-1] < query_ns:
+        if ts[0] > query_as or ts[-1] < query_as:
             raise ValueError(f"Interpolation window does not bracket query for {self._satellite}")
 
         if self._itype in ("Polynomial", "Barycentric"):
@@ -231,22 +202,23 @@ class OrbitInterpolator:
             # Using a bounded local stencil is safer numerically than fitting
             # 50+ nodes across a full day (Runge oscillations / roundoff).
             count = min(self._stencil_pts, len(ts))
-            bracket = int(np.searchsorted(ts, query_ns))
+            bracket = bisect_left(ts, query_as)
             # Always include the two bracketing observations.  Otherwise a
             # locally clustered set of nearest nodes might all fall on one
             # side of an irregularly sampled query, causing extrapolation.
             obligatory = {bracket - 1, bracket}
             remaining = [
-                int(i) for i in np.argsort(np.abs(ts - query_ns), kind="stable")
-                if int(i) not in obligatory
+                i for i in sorted(range(len(ts)), key=lambda i: abs(ts[i] - query_as))
+                if i not in obligatory
             ]
             nearest = np.array(sorted(obligatory | set(remaining[:count - 2])), dtype=int)
-            ts, ys = ts[nearest], ys[nearest]
+            ts, ys = [ts[i] for i in nearest], ys[nearest]
 
-        # Subtract integer nanoseconds *before* converting to float seconds.
-        # Directly converting 2024-era Unix timestamps to float loses precision.
-        rel_seconds = (ts - ts[0]).astype(np.float64) / _NS_PER_SECOND
-        q_seconds = (query_ns - int(ts[0])) / _NS_PER_SECOND
+        # Subtract Python integer attoseconds *before* converting to float.
+        # This preserves tiny time offsets; using absolute Unix seconds as
+        # floats would lose microseconds or worse in modern epochs.
+        rel_seconds = np.array([(t - ts[0]) / _ATTO_PER_SECOND for t in ts], dtype=float)
+        q_seconds = (query_as - ts[0]) / _ATTO_PER_SECOND
         if self._itype == "Linear":
             if ys.ndim == 1:
                 return np.asarray(np.interp(q_seconds, rel_seconds, ys))
@@ -265,13 +237,13 @@ class OrbitInterpolator:
         An unusable position raises ``ValueError``.  An unavailable clock
         returns ``NaN`` without discarding a perfectly valid position.
         """
-        query_ns = _as_nanoseconds(t)
+        query_as = to_attoseconds(t)
         pos = self._evaluate(
-            query_ns, self._pos_times, self._positions, gap_limit=self._position_gap_ns
+            query_as, self._pos_times, self._positions, gap_limit=self._position_gap_as
         )
         try:
             clock = float(
-                self._evaluate(query_ns, self._clk_times, self._clocks, gap_limit=self._clock_gap_ns)
+                self._evaluate(query_as, self._clk_times, self._clocks, gap_limit=self._clock_gap_as)
             )
         except ValueError:
             # No clock, gap, or too few valid clock samples does not imply
@@ -305,8 +277,8 @@ class Sp3Interpolator:
         self._time_system = time_system
         # Preserve the common time base, even where only one of the satellites
         # has an observation.  This is important for mixed GNSS SP3 products.
-        self._t = np.array(sorted({_as_nanoseconds(t) for t in data}), dtype=np.int64)
-        index_by_time = {int(epoch): idx for idx, epoch in enumerate(self._t)}
+        self._t = tuple(sorted({to_attoseconds(t) for t in data}))
+        index_by_time = {epoch: idx for idx, epoch in enumerate(self._t)}
         satellites = {str(sat).upper() for records in data.values() for sat in records}
         if not satellites:
             raise ValueError("No satellite position records for the requested GNSS systems")
@@ -328,13 +300,13 @@ class Sp3Interpolator:
                 if exclude_missing_clock_values and (clk is None or not np.isfinite(float(clk))):
                     # This option intentionally drops XYZ alongside the clock.
                     continue
-                i = index_by_time[_as_nanoseconds(epoch)]
+                i = index_by_time[to_attoseconds(epoch)]
                 xyz[i] = (float(x), float(y), float(z))
                 if clk is not None:
                     clocks[i] = float(clk)
             self._interpolators[sat] = OrbitInterpolator(
                 satid=sat,
-                tarray=self._t.astype("datetime64[ns]"),
+                tarray=[Epoch(t) for t in self._t],
                 x=xyz[:, 0], y=xyz[:, 1], z=xyz[:, 2], clk=clocks,
                 interval_in_sec=interval_in_sec,
                 min_data_pts=min_data_pts,
@@ -354,7 +326,14 @@ class Sp3Interpolator:
     @property
     def time_base(self) -> np.ndarray:
         """Shared, sorted SP3 epochs in ``numpy.datetime64[ns]`` format."""
-        return self._t.astype("datetime64[ns]").copy()
+        # The historical property exposes numpy datetime64[ns]. Users needing
+        # sub-nanosecond epochs should use time_base_attoseconds instead.
+        return np.array([np.datetime64(t // 10**9, 'ns') for t in self._t])
+
+    @property
+    def time_base_attoseconds(self) -> tuple[int, ...]:
+        """Return the full-precision, normalized epoch labels (Python ints)."""
+        return self._t
 
     @property
     def satellites(self) -> list[str]:
@@ -370,11 +349,24 @@ class Sp3Interpolator:
         return self._time_system
 
     @classmethod
-    def from_sp3(cls, filename, satsys: Sequence[str] | str, **kwargs) -> "Sp3Interpolator":
-        """Read one SP3-c/d file, select constellations and build interpolators."""
+    def from_sp3(
+        cls,
+        filename,
+        satsys: Sequence[str] | str,
+        *,
+        strict_epoch_count: bool = False,
+        **kwargs,
+    ) -> "Sp3Interpolator":
+        """Read SP3-c/d and interpolate the satellite systems requested.
+
+        ``strict_epoch_count=False`` preserves the original notebook API and
+        tolerates a stale declared header count with an explicit warning.
+        Choose True when validating unedited scientific orbit products.  This
+        option belongs to the SP3 reader, not the interpolation algorithm.
+        """
         from dsoclasses.orbits.sp3c import Sp3
 
-        source = Sp3(filename)
+        source = Sp3(filename, strict_epoch_count=strict_epoch_count)
         if "time_system" in kwargs:
             raise TypeError("from_sp3 determines time_system from the SP3 header")
         data = source.get_system_pos(satsys, toSI=True)

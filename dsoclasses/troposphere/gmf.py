@@ -107,6 +107,20 @@ bw_amp=[
  +1.885e-07, +5.792e-07, +3.990e-08, +2.000e-08, -5.700e-09]
 
 def gmf(t, lat, lon, hgt, zd):
+    """Return hydrostatic/wet Global Mapping Function factors.
+
+    ``lat``/``lon`` and zenith distance ``zd`` are radians. Only positive
+    satellite elevations are physically meaningful for a slant-delay model;
+    below-horizon inputs are rejected instead of returning plausible-looking
+    but invalid correction factors.
+    """
+    parameters = np.asarray([lat, lon, hgt, zd], dtype=float)
+    if np.any(~np.isfinite(parameters)):
+        raise ValueError("GMF latitude, longitude, height and zenith distance must be finite")
+    if not (-np.pi/2 <= lat <= np.pi/2):
+        raise ValueError("GMF latitude must be in [-pi/2, pi/2] radians")
+    if not (0 <= zd < np.pi/2):
+        raise ValueError("GMF requires elevation >0 and <=90 degrees")
     mjd = calmjd.cal2fmjd(t)
     doy = mjd  - 44239. + 1. - 28
     nmax = 9

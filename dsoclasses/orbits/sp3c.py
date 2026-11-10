@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import re
+import warnings
 from typing import Iterator
 
 import numpy as np
@@ -70,6 +71,15 @@ def _optional_int(field: str) -> int | None:
     return int(field) if field.strip() else None
 
 
+class Sp3EpochCountWarning(UserWarning):
+    """The file's declared epoch count differs from its parsed epoch count.
+
+    This is intentionally a warning by default: edited SP3 products sometimes
+    retain the original header even though their time series was shortened.
+    The mismatch does not by itself invalidate the records that are present.
+    """
+
+
 class Sp3:
     """Read a position (``#cP``) or position/velocity (``#cV``) SP3 product.
 
@@ -78,6 +88,12 @@ class Sp3:
     fn:
         Path to an uncompressed SP3-c or SP3-d text file.  The reader accepts
         the standard multi-record header or a shorter, otherwise valid header.
+    strict_epoch_count:
+        If False (default), report a discrepancy between the number of epoch
+        records and the header's declared count as Sp3EpochCountWarning, and
+        continue parsing the actual observations.  If True, reject such a
+        mismatch with ValueError.  Neither setting tolerates malformed P/V
+        records, duplicate epochs, or a missing EOF marker.
 
     Notes
     -----
@@ -86,8 +102,17 @@ class Sp3:
     ``datetime`` keys, which cannot represent all eight SP3 fractional digits.
     """
 
-    def __init__(self, fn: str | Path):
+    def __init__(self, fn: str | Path, *, strict_epoch_count: bool = False):
+        # The original notebook only supplies the path.  Keep that API while
+        # permitting callers to request strict, publication-grade validation.
+        if not isinstance(strict_epoch_count, bool):
+            raise TypeError("strict_epoch_count must be bool")
         self.fn = str(fn)
+        self.strict_epoch_count = strict_epoch_count
+        # The SP3 header declares num_epochs, whereas observed_num_epochs
+        # reports how many '*' epoch records we successfully parsed.  This is
+        # populated when get_system_pos/get_satellite finish reading the data.
+        self.observed_num_epochs: int | None = None
         self.sat_ids: list[str] = []
         self.sat_acc: list[int | None] = []
         self.time_sys = "UNKNOWN"
@@ -219,9 +244,11 @@ class Sp3:
     def _iter_epochs(self, *, toSI: bool) -> Iterator[tuple[np.datetime64, dict[str, dict]]]:
         """Yield one epoch at a time, grouping satellites and optional V lines.
 
-        We check ordering, duplicates and the expected epoch count.  Correlation
-        records (EP/EV) are recognized but intentionally ignored: they are not
-        needed for position/clock interpolation.
+        We check ordering, duplicates and EOF regardless of the chosen count
+        policy.  The declared epoch count is advisory by default because a
+        shortened teaching file can preserve its original SP3 header.  A
+        warning makes the discrepancy visible rather than concealing it.
+        Correlation records (EP/EV) are ignored for position interpolation.
         """
         current_time: np.datetime64 | None = None
         observations: dict[str, dict] = {}
@@ -267,8 +294,21 @@ class Sp3:
             raise ValueError("SP3 data ended without the required EOF record")
         if current_time is not None:
             yield current_time, observations
+        # This count refers to '*' epoch lines, not to P/V observations.
+        # In particular, dropping one satellite's P record does NOT change it;
+        # dropping an entire epoch block does.  Never invent missing epochs.
+        self.observed_num_epochs = epochs_seen
         if self.num_epochs != epochs_seen:
-            raise ValueError(f"SP3 declares {self.num_epochs} epochs, found {epochs_seen}")
+            mismatch = self.num_epochs - epochs_seen
+            message = (
+                f"SP3 epoch-count mismatch in {self.fn!r}: header declares "
+                f"{self.num_epochs} epochs, found {epochs_seen} epoch records "
+                f"(difference {mismatch:+d}). The file may be shortened or "
+                "edited; only the observed epochs can be interpolated."
+            )
+            if self.strict_epoch_count:
+                raise ValueError(message)
+            warnings.warn(message, Sp3EpochCountWarning, stacklevel=2)
 
     def get_system_pos(self, satsys, toSI: bool = True) -> dict:
         """Return positions and clocks for the selected satellite systems.

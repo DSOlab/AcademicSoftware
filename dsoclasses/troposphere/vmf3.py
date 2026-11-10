@@ -1,193 +1,120 @@
+"""VMF3 site interpolation and global Vienna mapping function implementation.
+
+The file reader holds a small table of atmospheric records at known epochs
+rather than maintaining fragile mutable stream positions. This deliberately
+trades memory for straightforward validation and reproducibility.
+"""
+from __future__ import annotations
+
+from bisect import bisect_left
 from dsoclasses.time.calmjd import cal2fmjd, mjd2cal
+from dsoclasses.time.pyattotime import to_attoseconds
 import datetime
 import math
 from pathlib import Path
 from typing import Tuple, Dict
 import numpy as np
 
-
-class DummyStream:
-    def __init__(self, fn):
-        # some comments contain on-ascii chars ...
-        self._stream = open(fn, "r", encoding="ascii", errors="ignore")
-
-    def stream(self):
-        return self._stream
-
-    def stream_pos(self):
-        return self._stream.tell()
-
-    def set_stream_pos(self, pos):
-        self._stream.seek(pos)
-
-    def rewind(self, pos=0):
-        self._stream.seek(pos)
-
-
-class SiteVmf3Block:
-
-    def __init__(self):
-        self._t = datetime.datetime.min
-        self._records = {}
-
-    def site_data(self, site):
-        return self._records[site]
-
-    @staticmethod
-    def queryNextBlockEpoch(fin: DummyStream) -> datetime.datetime:
-        pos = fin.stream_pos()
-        while True:
-            line = fin.stream().readline()
-            if not line:  # EOF
-                raise EOFError("Failed quering next block epoch; EOF encountered")
-            if line[0] != "#":
-                l = line.split()
-                return mjd2cal(float(l[1]))
-        fin.set_stream_pos(pos)
-
-    @staticmethod
-    def skipNextBlock(fin: DummyStream):
-        current_epoch = -999.0
-        # self._records = {}
-        pos = fin.stream_pos()
-        while True:
-            line = fin.stream().readline()
-            if not line:  # EOF
-                raise EOFError("Failed skipping next block epoch; EOF encountered")
-            if line[0] != "#":
-                mjd = float(line.split()[1])
-                current_epoch = mjd if current_epoch == -999.0 else current_epoch
-                if mjd == current_epoch:
-                    pos = fin.stream_pos()
-                elif mjd > current_epoch:
-                    break
-        # self._t = mjd2cal(current_epoch)
-        fin.set_stream_pos(pos)
-
-    def parseNextBlock(self, fin: DummyStream, site_list=[]):
-        """
-        # columns:
-        # -------
-        # (1) station name
-        # (2) modified Julian date
-        # (3) hydrostatic mf coefficient a_h
-        # (4) wet mf coefficient a_w
-        # (5) zenith hydrostatic delay (m)
-        # (6) zenith wet delay (m)
-        # (7) pressure at the site (hPa)
-        # (8) temperature at the site (�C)
-        # (9) water vapour pressure at the site (hPa)
-        #
-        #    ADEA      58119.00  0.00121504  0.00074311  2.2149  0.0364   973.84  -0.21   2.28
-        """
-        current_epoch = -999.0
-        self._records = {}
-        pos = fin.stream_pos()
-        while True:
-            line = fin.stream().readline()
-            if not line:  # EOF
-                raise EOFError("Failed parsing next block epoch; EOF encountered")
-            l = line.split()
-            if line[0] != "#":
-                if current_epoch == -999.0 or float(l[1]) == current_epoch:
-                    current_epoch = float(l[1])
-                    if l[0] in site_list or site_list == []:
-                        self._records[l[0]] = {
-                            "ah": float(l[2]),
-                            "aw": float(l[3]),
-                            "zhd": float(l[4]),
-                            "zwd": float(l[5]),
-                            "p": float(l[6]),
-                            "t": float(l[7]),
-                            "wvp": float(l[8]),
-                        }
-                    pos = fin.stream_pos()
-                elif float(l[1]) > current_epoch:
-                    break
-        self._t = mjd2cal(current_epoch)
-        fin.set_stream_pos(pos)
+_SITE_FIELDS = ('ah', 'aw', 'zhd', 'zwd', 'p', 't', 'wvp')
 
 
 class SiteVmf3:
+    """Interpolated VMF3 site coefficients from a standard 6-hourly file.
 
-    def __init__(self, fn, site_list=[]):
-        self._fn = fn
-        self._fin = DummyStream(self._fn)
-        self._site_list = site_list
-        self._block0 = SiteVmf3Block()
-        self._block1 = SiteVmf3Block()
+    Values between consecutive epochs are linearly interpolated; out-of-range
+    queries are rejected. Missing requested sites and duplicate site/epoch
+    records are errors, not silently substituted by neighboring stations.
+    """
+
+    def __init__(self, filename, site_list=None):
+        self._fn = str(filename)
+        self._site_list = set(site_list or [])
+        records = {}
+        with open(filename, encoding='ascii', errors='replace') as stream:
+            for line_no, line in enumerate(stream, start=1):
+                if not line.strip() or line.lstrip().startswith('#'):
+                    continue
+                parts = line.split()
+                if len(parts) < 9:
+                    raise ValueError(f'Malformed VMF3 record at {filename}:{line_no}')
+                name = parts[0]
+                if self._site_list and name not in self._site_list:
+                    continue
+                try:
+                    epoch = mjd2cal(float(parts[1]))
+                    values = tuple(float(x) for x in parts[2:9])
+                except (ValueError, OverflowError) as exc:
+                    raise ValueError(f'Invalid VMF3 values at line {line_no}') from exc
+                if not np.all(np.isfinite(values)):
+                    raise ValueError(f'Non-finite VMF3 values at line {line_no}')
+                slot = records.setdefault(epoch, {})
+                if name in slot:
+                    raise ValueError(f'Duplicate VMF3 data for {name} at {epoch}')
+                slot[name] = dict(zip(_SITE_FIELDS, values))
+        if not records:
+            if self._site_list:
+                raise LookupError(f'VMF3 stations not present in file: {sorted(self._site_list)}')
+            raise ValueError(f'No usable VMF3 data in {filename}')
+        self._records = records
+        self._epochs = sorted(records)
+        # Normalized times are used only for searching, never as floating
+        # Julian dates; queries may be native datetime or attodatetime.
+        self._epoch_as = tuple(to_attoseconds(t) for t in self._epochs)
+        if self._site_list:
+            missing = self._site_list - {site for d in records.values() for site in d}
+            if missing:
+                raise LookupError(f'VMF3 stations not present in file: {sorted(missing)}')
+
+    def _bracket(self, t):
+        """Return a bracketing epoch pair (or same epoch for an exact hit)."""
+        query = to_attoseconds(t)
+        if query < self._epoch_as[0] or query > self._epoch_as[-1]:
+            raise ValueError(f'VMF3 epoch {t} is outside file coverage '
+                             f'[{self._epochs[0]}, {self._epochs[-1]}]')
+        idx = bisect_left(self._epoch_as, query)
+        if idx < len(self._epoch_as) and self._epoch_as[idx] == query:
+            return self._epochs[idx], self._epochs[idx]
+        return self._epochs[idx - 1], self._epochs[idx]
 
     def interpolate_site(self, site, t):
-        data0 = self._block0.site_data(site)
-        data1 = self._block1.site_data(site)
-        x1mx0 = (self._block1._t - self._block0._t).total_seconds()
-        xmx0 = (t - self._block0._t).total_seconds()
-        x1mx = (self._block1._t - t).total_seconds()
-        w0 = x1mx / x1mx0
-        w1 = xmx0 / x1mx0
-        return {
-            k: data0[k] * w0 + data1[k] * w1
-            for k in ["ah", "aw", "zhd", "zwd", "p", "t", "wvp"]
-        }
+        """Return time-interpolated atmospheric fields for one station."""
+        if self._site_list and site not in self._site_list:
+            raise ValueError(f'Site {site!r} was not selected when loading VMF3')
+        before, after = self._bracket(t)
+        try:
+            d0 = self._records[before][site]
+            d1 = self._records[after][site]
+        except KeyError as exc:
+            raise LookupError(f'Missing VMF3 data for site {site!r} at a bracketing epoch') from exc
+        if before == after:
+            return d0.copy()
+        # Compare attodatetime to datetime without mixing concrete types.
+        alpha = ((to_attoseconds(t) - to_attoseconds(before))
+                 / (to_attoseconds(after) - to_attoseconds(before)))
+        return {key: (1 - alpha) * d0[key] + alpha * d1[key] for key in _SITE_FIELDS}
 
     def getBlocksForEpoch(self, t):
-        # quick return
-        if t >= self._block0._t and t < self._block1._t:
-            return
-
-        # for each day we have four data blocks, starting at [mjd.0, mjd.25, mjd.50, mjd.75]
-        mjd = cal2fmjd(t)
-        ip = int((mjd - int(mjd)) * 100) // 25  # previous range in [0,3]
-        np = ip + 1 if (ip != 3) else 0
-        t0 = mjd2cal(int(mjd) + (ip * 25) / 100.0)
-        t1 = mjd2cal(int(mjd + int(np == 0)) + (np * 25) / 100.0)
-
-        # easy case, we just move forward one epoch ...
-        if self._block1._t == t0:
-            self._block0._t = self._block1._t
-            self._block1.parseNextBlock(self._fin, self._site_list)
-            assert self._block1._t == t1 and self._block0._t == t0
-            return
-
-        # else rewind file and start looking for required epochs ...
-        self._fin.rewind()
-        next_epoch = SiteVmf3Block.queryNextBlockEpoch(self._fin)
-        while next_epoch < t0:
-            SiteVmf3Block.skipNextBlock(self._fin)
-            next_epoch = SiteVmf3Block.queryNextBlockEpoch(self._fin)
-
-        self._block0.parseNextBlock(self._fin, self._site_list)
-        self._block1.parseNextBlock(self._fin, self._site_list)
-        assert self._block1._t == t1 and self._block0._t == t0
-        return
+        """Compatibility method returning the two bracketing datetimes."""
+        return self._bracket(t)
 
     def vmf3(self, site_name, site_lat, site_lon, el, t):
-        if (site_name not in self._site_list) and (self._site_list != []):
-            raise RuntimeError(
-                f"Site {site_name} not included in SiteVmf3 instance! cannot compute vmf3."
-            )
-        self.getBlocksForEpoch(t)
-        site_dct = self.interpolate_site(site_name, t)
-        mfh, mfw = vmf3(
-            site_dct["ah"],
-            site_dct["aw"],
-            cal2fmjd(t),
-            site_lat,
-            site_lon,
-            math.pi / 2 - el,
+        """Return interpolated site data plus hydrostatic/wet mapping factors."""
+        if not math.isfinite(float(el)) or not (0 < el <= math.pi / 2):
+            raise ValueError('VMF3 requires elevation 0 < el <= pi/2 radians')
+        fields = self.interpolate_site(site_name, t)
+        fields['mfh'], fields['mfw'] = vmf3(
+            fields['ah'], fields['aw'], cal2fmjd(t),
+            site_lat, site_lon, math.pi / 2 - el,
         )
-        site_dct["mfh"] = mfh
-        site_dct["mfw"] = mfw
-        return site_dct
+        return fields
 
     def tropo_delay(self, site_name, site_lat, site_lon, el, t):
         d = self.vmf3(site_name, site_lat, site_lon, el, t)
-        return d["zhd"] * d["mfh"] + d["zwd"] * d["mfw"]
+        return d['zhd'] * d['mfh'] + d['zwd'] * d['mfw']
 
     def tropo_dealy_info(self, site_name, site_lat, site_lon, el, t):
-        d = self.vmf3(site_name, site_lat, site_lon, el, t)
-        return d
-
+        """Backwards-compatible historical misspelling of ``vmf3``."""
+        return self.vmf3(site_name, site_lat, site_lon, el, t)
 
 def _legendre_VW(x: float, y: float, z: float, nmax: int = 12):
     """Recurrence for (fully normalized) V/W as in MATLAB vmf3.m."""

@@ -1,6 +1,5 @@
 import numpy as np
 import datetime
-import attotime
 
 # mean gravity in m/s**2
 gm = 9.80665e0
@@ -106,78 +105,105 @@ def bilinear_interpolation(doy, lat, lon, hgt, tld, trd, bld, brd):
     y  = np.degrees(lat)
     x2 = trd['lon']
     x1 = tld['lon']
-    x  = np.degrees(lon)
-    assert x2 >= x and x >= x1
-    assert y2 >= y and y >= y1
+    x  = np.degrees(lon) % 360.0
+    if x < x1:
+        x += 360.0
+    if not (x1 - 1e-9 <= x <= x2 + 1e-9):
+        raise ValueError("Longitude is outside selected GPT3 interpolation cell")
+    if not (y1 - 1e-9 <= y <= y2 + 1e-9):
+        raise ValueError("Latitude is outside selected GPT3 interpolation cell")
     bi = lambda Q12,Q22,Q11,Q21: (1./((x2-x1)*(y2-y1))) * (Q11*(x2-x)*(y2-y) + Q21*(x-x1)*(y2-y) + Q12*(x2-x)*(y-y1) + Q22*(x-x1)*(y-y1))
     return {'p': bi(*pl), 'T': bi(*Tl), 'dT': bi(*dTl)*1e3, 'e': bi(*el), 'ah': bi(*ahl), 'aw': bi(*awl), 'la': bi(*lal), 'Tm': bi(*Tml), 'Gn_h': bi(*Gn_hl), 'Ge_h': bi(*Ge_hl), 'Gn_w': bi(*Gn_wl), 'Ge_w': bi(*Ge_wl)}
 
 
 def get_grid_nodes(lon, lat, grid):
-    """ Grid file: https://vmf.geo.tuwien.ac.at/codes/gpt3_5.grd
+    """Read the four grid points bracketing a geodetic position.
+
+    Longitude is periodic: the 357.5° / 2.5° seam must work just like any
+    interior cell. The published 5-degree grid contains nodes from -87.5°
+    to 87.5° latitude; higher latitudes are rejected rather than silently
+    extrapolating across the poles.
+
+    This intentionally scans the text file on each call; clarity and strict
+    grid validation are prioritized over speed.
     """
+    import math
 
-# we want positive longitude for the grid
-    dlon = np.degrees(lon) + 360. if np.degrees(lon)<0. else np.degrees(lon)
-    if dlon < 2.5 or dlon > 360.-2.5:
-        print("Error. Longitude out of gpt3 grid file range.")
-        raise RuntimeError
-    dlat = np.degrees(lat)
-    if dlat < -87.5 or dlat > 87.5:
-        print("Error. Latitude out of gpt3 grid file range.")
-        raise RuntimeError
+    if not math.isfinite(float(lon)) or not math.isfinite(float(lat)):
+        raise ValueError('GPT3 latitude and longitude must be finite')
+    longitude = math.degrees(lon) % 360.0
+    latitude = math.degrees(lat)
+    if abs(latitude) > 87.5 + 1e-9:
+        raise ValueError('GPT3 5-degree grid does not cover latitudes beyond +/-87.5 degrees')
 
-    lons_per_lat = int(np.floor(((360.0-2.5) - 2.5) / 5.)) + 1
-    lon_index    = int(np.floor((dlon - 2.5) / 5.))
-    lat_index    = int(np.floor((dlat - 87.5) / (-5.))) 
-    # print("lpl={:}, lat idx={:} lon idx={:}".format(lons_per_lat, lat_index, lon_index))
-    # print("Lat: 87.5 + {:}*(-5) = {:}".format(lat_index, 87.5+lat_index*(-5)))
-    # print("Lon: 02.5 + {:}*(-5) = {:}".format(lon_index, 2.5+lon_index*(-5)))
+    nodes = {}
+    with open(grid, encoding='ascii', errors='replace') as stream:
+        header = stream.readline()
+        if not header.lstrip().startswith('%lat lon') and not header.lstrip().startswith('% lat lon'):
+            # Most published grids start with the canonical "% lat lon ..." header.
+            # There is no need to compare every column token here; validate
+            # each required numeric record below instead.
+            if 'lat' not in header.lower() or 'lon' not in header.lower():
+                raise ValueError('GPT3 grid header is missing latitude/longitude columns')
+        for line_no, line in enumerate(stream, start=2):
+            if not line.strip() or line.startswith('%'):
+                continue
+            try:
+                node = parse_gpt3_line(line)
+            except (ValueError, IndexError) as exc:
+                raise ValueError(f'Malformed GPT3 grid row at line {line_no}') from exc
+            key = (round(node['lat'], 6), round(node['lon'] % 360.0, 6))
+            if key in nodes:
+                raise ValueError(f'Duplicate GPT3 grid point {key}')
+            nodes[key] = node
 
-    tl = lat_index*lons_per_lat+lon_index + 1
-    tld = {}; trd = {}; bld = {}; brd = {};
-    
-# read respective lines off from the grid file
-    with open(grid, 'r') as fin:
-# read and validate first line
-        line = fin.readline()
-        assert line.strip().replace(" ", "") == "%latlonp:a0A1B1A2B2T:a0A1B1A2B2Q:a0A1B1A2B2dT:a0A1B1A2B2unduHsa_h:a0A1B1A2B2a_w:a0A1B1A2B2lambda:a0A1B1A2B2Tm:a0A1B1A2B2Gn_h:a0A1B1A2B2Ge_h:a0A1B1A2B2Gn_w:a0A1B1A2B2Ge_w:a0A1B1A2B2"
-        #keys = line[1:].strip().split()
-        for i in range(tl): 
-            line = fin.readline()
-        tld = parse_gpt3_line(line)
-        line = fin.readline()
-        trd = parse_gpt3_line(line)
-        for i in range(lons_per_lat - 1): line = fin.readline()
-        bld = parse_gpt3_line(line)
-        line = fin.readline()
-        brd = parse_gpt3_line(line)
+    if not nodes:
+        raise ValueError('GPT3 grid has no data rows')
 
-        # print("({:}, {:})   {:}, {:})".format(tld['lat'], tld['lon'], trd['lat'], trd['lon']))
-        # print("({:}, {:})   {:}, {:})".format(bld['lat'], bld['lon'], brd['lat'], brd['lon']))
+    # Compute longitude cell at 2.5, 7.5, ..., 357.5 degrees. The upper
+    # boundary is allowed beyond 360 so bilinear interpolation remains simple.
+    lon_lower = 2.5 + 5.0 * math.floor((longitude - 2.5) / 5.0)
+    lon_upper = lon_lower + 5.0
+    lon_query = longitude
+    if longitude < 2.5:
+        lon_query += 360.0
+    # Compute latitude cell with a well-defined choice at exact boundaries.
+    lat_lower = -87.5 + 5.0 * math.floor((latitude + 87.5) / 5.0)
+    if lat_lower >= 87.5:
+        lat_lower = 82.5
+    lat_upper = lat_lower + 5.0
 
-# checks
-    assert tld['lat'] == trd['lat'] and tld['lon']  < trd['lon']
-    assert bld['lat'] == brd['lat'] and bld['lon']  < brd['lon']
-    assert tld['lat']  > bld['lat'] and tld['lon'] == bld['lon']
-    assert trd['lat']  > brd['lat'] and trd['lon'] == brd['lon']
-    # print("{:} >= {:} and {:} < {:}".format(tld['lat'], np.degrees(lat), bld['lat'], np.degrees(lat)))
-    assert (tld['lat'] >= np.degrees(lat)) and (bld['lat'] < np.degrees(lat))
-    assert (tld['lon'] <= np.degrees(lon)) and (brd['lon'] > np.degrees(lon))
+    def lookup(la, lo):
+        key = (round(la, 6), round(lo % 360.0, 6))
+        try:
+            item = nodes[key].copy()
+        except KeyError as exc:
+            raise ValueError(f'GPT3 grid lacks node {key}; check grid resolution and completeness') from exc
+        item['lon'] = lo  # Unwrap seam for the subsequent bilinear formula.
+        return item
 
+    # Returned order used by bilinear_interpolation: top-left, top-right,
+    # bottom-left, bottom-right.
+    tld = lookup(lat_upper, lon_lower)
+    trd = lookup(lat_upper, lon_upper)
+    bld = lookup(lat_lower, lon_lower)
+    brd = lookup(lat_lower, lon_upper)
     return tld, trd, bld, brd
 
-def gpt3(t, lon, lat, hgt, grid):
-# first get the four surrounding ndes
-    tld, trd, bld, brd = get_grid_nodes(lon, lat, grid)
-# bilinear interpolation (we must first compute fractional doy)
-    doy = int(t.strftime('%j'))
-    try:
-        t0 = datetime.datetime(t.year, t.month, t.day)
-        doy += (t-t0).total_seconds() / 86400.
-    except: # is this maybe an attotime instance ?
-        t0 = attotime.attodatetime(t.year, t.month, t.day)
-        doy += float((t-t0).total_seconds()) / 86400.
 
-    meteo = bilinear_interpolation(doy, lat, lon, hgt, tld, trd, bld, brd)
-    return meteo
+def gpt3(t, lon, lat, hgt, grid):
+    """Return GPT3 meteorology at an epoch, geodetic position and grid path.
+
+    ``lon`` and ``lat`` are radians, ``hgt`` is ellipsoidal metres. Epochs
+    may be datetime or attotime; no datetime-type-specific subtraction is
+    necessary to compute the fractional day-of-year.
+    """
+    tld, trd, bld, brd = get_grid_nodes(lon, lat, grid)
+    # Use the same epoch normalization as the orbit and RINEX modules.
+    # MJD and day-of-year are calendar quantities; no implicit GPS/UTC
+    # conversion takes place, and sub-microsecond RINEX labels are accepted.
+    from dsoclasses.time.calmjd import cal2mjd
+    from dsoclasses.time.pyattotime import at2pt
+    _, seconds_of_day = cal2mjd(t)
+    doy = at2pt(t).timetuple().tm_yday + seconds_of_day / 86400.0
+    return bilinear_interpolation(doy, lat, lon, hgt, tld, trd, bld, brd)

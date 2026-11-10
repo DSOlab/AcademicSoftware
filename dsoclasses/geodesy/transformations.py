@@ -9,10 +9,17 @@ def azele(rsat, rsta):
     # topocentric matrix
     lat, lon, hgt = car2ell(*rsta)
     R = geodetic2lvlh(lat, lon).transpose()
+    # Require valid ECEF vectors, including for callers passing Python lists.
+    rsat = np.asarray(rsat, dtype=float)
+    rsta = np.asarray(rsta, dtype=float)
+    if rsat.shape != (3,) or rsta.shape != (3,) or not np.all(np.isfinite(rsat)) or not np.all(np.isfinite(rsta)):
+        raise ValueError("rsat and rsta must be finite ECEF XYZ vectors")
     enu = R @ (rsat - rsta)
     r = np.linalg.norm(enu)
+    if r == 0:
+        raise ValueError("Satellite and station positions must differ")
     az = np.arctan2(enu[0], enu[1])
-    el = np.arcsin(enu[2] / r)
+    el = np.arcsin(np.clip(enu[2] / r, -1.0, 1.0))
     return r, az, el
 
 
@@ -45,11 +52,16 @@ def geodetic2lvlh(lat, lon):
 
 
 def ell2car(lat, lon, h, a=6378137e0, f=1e0 / 298.257223563e0):
+    """Convert geodetic latitude/longitude [rad] and height [m] to ECEF XYZ."""
+    if not np.all(np.isfinite([lat, lon, h, a, f])):
+        raise ValueError("Geodetic coordinates and ellipsoid must be finite")
+    if not (-np.pi/2 <= lat <= np.pi/2) or a <= 0 or not (0 < f < 1):
+        raise ValueError("Invalid geodetic latitude or ellipsoid")
     e2 = (2e0 - f) * f  # eccentricity squared
-    sf = sin(lat)
-    cf = cos(lat)
-    sl = sin(lon)
-    cl = cos(lon)
+    sf = math.sin(lat)
+    cf = math.cos(lat)
+    sl = math.sin(lon)
+    cl = math.cos(lon)
     Rn = a / math.sqrt(1e0 - e2 * sf * sf)  # normal radius of curvature
     x = (Rn + h) * cf * cl
     y = (Rn + h) * cf * sl
@@ -58,6 +70,15 @@ def ell2car(lat, lon, h, a=6378137e0, f=1e0 / 298.257223563e0):
 
 
 def car2ell(x, y, z, a=6378137e0, f=1e0 / 298.257223563e0):
+    """Convert ECEF XYZ metres to geodetic latitude, longitude, height.
+
+    The geocentre has no unique geodetic latitude/longitude; reject it
+    explicitly rather than returning an arbitrary polar coordinate.
+    """
+    if not np.all(np.isfinite([x, y, z, a, f])) or a <= 0 or not (0 < f < 1):
+        raise ValueError("ECEF coordinates and ellipsoid must be finite and valid")
+    if x == y == z == 0:
+        raise ValueError("Geodetic coordinates are undefined at the Earth centre")
     aeps2 = a * a * 1e-32
     e2 = (2e0 - f) * f  # eccentricity squared
     e4t = e2 * e2 * 1.5e0

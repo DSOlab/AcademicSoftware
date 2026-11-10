@@ -4,7 +4,10 @@ import numpy as np
 
 
 def approx_gast(t):
-    sec_day = (t - t.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()
+    # Use the same calendar normalization as the RINEX and orbit modules;
+    # native datetime, numpy datetime64 and attodatetime are all accepted.
+    from dsoclasses.time.calmjd import cal2mjd
+    _, sec_day = cal2mjd(t)
     omega_earth = 7.292115e-5  ## [rad/s]
     return omega_earth * float(sec_day)
 
