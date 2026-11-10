@@ -8,22 +8,36 @@ from dsoclasses.time.calmjd import cal2fmjd
 from dsoclasses.time.pyattotime import to_attoseconds, at2pt
 
 
-def parse_sinex_date(dstr):
-    """Parse a ate string geiven in the format: YY:DDD:SSSSS, where :
-    * YY is the two-digit year,
-    * DDD is the day of year, and
-    * SSSSS is the seconds of day (integral)
+def parse_sinex_date(text):
+    """Read SINEX ``YY:DDD:SSSSS`` into a naive calendar time.
+
+    This teaching reader expects finite, explicitly dated solution epochs.
+    Unknown/open dates such as ``00:000:00000`` are not silently turned into
+    a real date; handling open intervals belongs to a more general parser.
     """
-    l = dstr.strip().split(":")
-    if len(l) != 3:
-        print(
-            "Error. Failed resolving SINEX date: {:}".format(dstr.strip()),
-            file=sys.stderr,
-        )
-        raise RuntimeError
-    date = datetime.datetime.strptime(" ".join([l[0], l[1]]), "%y %j")
-    time = datetime.timedelta(seconds=int(l[2]))
-    return date + time
+    try:
+        year_s, doy_s, second_s = text.strip().split(':')
+        if len(year_s) != 2:
+            raise ValueError('Expected 2-digit SINEX year')
+        yy, doy, seconds = int(year_s), int(doy_s), int(second_s)
+        year = 2000 + yy if yy < 80 else 1900 + yy
+        days = 366 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 365
+        if not (1 <= doy <= days) or not (0 <= seconds <= 86400):
+            raise ValueError('Invalid SINEX day-of-year or seconds-of-day')
+        return datetime.datetime(year, 1, 1) + datetime.timedelta(days=doy-1, seconds=seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'Invalid finite SINEX epoch {text!r}') from exc
+
+
+def _parse_interval_date(value, *, start):
+    """Return a finite epoch, or an open SINEX interval endpoint.
+
+    Unknown boundaries (00:000:00000) are allowed only for a solution's
+    applicability, never for its reference-coordinate epoch.
+    """
+    if value.strip() == '00:000:00000':
+        return datetime.datetime.min if start else datetime.datetime.max
+    return parse_sinex_date(value)
 
 
 class Sinex:
@@ -52,8 +66,8 @@ class Sinex:
             self.agency = line[11:14].strip()
             self.time_creation = parse_sinex_date(line[14:28])
             self.data_provider = line[28:31].strip()
-            self.data_start = parse_sinex_date(line[31:44])
-            self.data_stop = parse_sinex_date(line[44:57])
+            self.data_start = _parse_interval_date(line[31:44], start=True)
+            self.data_stop = _parse_interval_date(line[44:57], start=False)
             self.technique = line[58]
             self.num_estimates = int(line[60:65])
             self.constraint_code = int(line[66])
@@ -80,12 +94,14 @@ class Sinex:
                     dct["technique"] = line[19]
                     dct["description"] = line[21:44].strip()
                     l = line[44:].split()
-                    dct["lon"] = math.radians(
-                        float(l[0]) + float(l[1]) / 60e0 + float(l[2]) / 60e0 / 60e0
-                    )
-                    dct["lat"] = math.radians(
-                        float(l[3]) + float(l[4]) / 60e0 + float(l[5]) / 60e0 / 60e0
-                    )
+                    # A negative degree value makes *all* DMS components
+                    # negative; do not accidentally add positive arcminutes.
+                    def dms(deg, minute, second):
+                        degrees = float(deg)
+                        angle = abs(degrees) + abs(float(minute))/60 + abs(float(second))/3600
+                        return math.radians(math.copysign(angle, degrees))
+                    dct["lon"] = dms(*l[:3])
+                    dct["lat"] = dms(*l[3:6])
                     dct["hgt"] = float(l[6])
                     if site_list_in == [] or dct["code"] in site_list_in:
                         site_list_out.append(dct)
@@ -118,8 +134,8 @@ class Sinex:
                     dct["solution_id"] = int(line[9:13].strip())
                     dct["technique"] = line[14]
                     l = line[16:].split()
-                    dct["start"] = parse_sinex_date(l[0])
-                    dct["stop"] = parse_sinex_date(l[1])
+                    dct["start"] = _parse_interval_date(l[0], start=True)
+                    dct["stop"] = _parse_interval_date(l[1], start=False)
                     dct["meant"] = parse_sinex_date(l[2])
                     if site_list_in == [] or dct["code"] in site_list_in:
                         site_list_out.append(dct)
@@ -141,8 +157,8 @@ class Sinex:
                     dct["solution_id"] = int(line[9:13].strip())
                     dct["technique"] = line[14]
                     l = line[16:].split()
-                    dct["start"] = parse_sinex_date(l[0])
-                    dct["stop"] = parse_sinex_date(l[1])
+                    dct["start"] = _parse_interval_date(l[0], start=True)
+                    dct["stop"] = _parse_interval_date(l[1], start=False)
                     dct["axe"] = l[2]
                     dct["up"], dct["north"], dct["east"] = [float(d) for d in l[3:]]
                     if site_list_in == [] or dct["code"] in site_list_in:
@@ -187,13 +203,11 @@ class Sinex:
         sta_list_out_extra = []
         try:
             sol_info = self.solution_epochs(site_list_in)
-        except:
-            print(
-                "Warning. No block SOLUTION/EPOCHS found in SINEX file {:}".format(
-                    self.filename
-                )
-            )
-            return site_list_out
+        except RuntimeError as exc:
+            # A static single-epoch/PSD SINEX may omit this block, but
+            # coordinate extrapolation requires its validity intervals.
+            raise LookupError('SINEX lacks SOLUTION/EPOCHS; cannot select a '
+                              'valid station coordinate solution') from exc
 
         for estimate in site_list_out:
             dct = estimate
@@ -210,104 +224,133 @@ class Sinex:
                     estimate_matched = True
                     break
             if not estimate_matched:
-                print("ERROR. Failed matching SOLUTION/EPOCHS for SOLUTION/ESTIMATE!")
-                raise RuntimeError
+                raise LookupError(
+                    f'SINEX SOLUTION/ESTIMATE has no matching SOLUTION/EPOCHS '
+                    f'for station {dct["code"]}, solution {dct["solution_id"]}'
+                )
             sta_list_out_extra.append(dct)
         return sta_list_out_extra
 
 
 def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=False, dpod_freq_corr_fn=None):
-    # All comparison and extrapolation arithmetic uses the shared integer
-    # attosecond convention.  In particular, do not truncate an attodatetime
-    # to whole seconds or use datetime.timedelta.days (which discards hours).
-    epoch_as = to_attoseconds(epoch)
-    # A native datetime is only needed by optional calendar-output routines.
-    calendar_epoch = epoch if isinstance(epoch, datetime.datetime) else at2pt(epoch)
+    """Propagate SINEX station coordinates to ``epoch`` using station velocity.
+
+    Arguments
+    ---------
+    sinex_fn: file path to a station coordinate/velocity SINEX product.
+    site_list: iterable of four-character station identifiers.
+    epoch: datetime, attodatetime or other supported precise epoch label.
+    apply_eccentricity: if true, add station SITE/ECCENTRICITY to XYZ.
+    dpod_freq_corr_fn: optional DORIS periodic-displacement table.
+
+    Returns
+    -------
+    ``{site: {'X': m, 'Y': m, 'Z': m, 'soln': solution_id}}``.
+
+    Important conventions
+    ---------------------
+    Positions refer to the stated reference frame and reference epoch of the
+    SINEX file. Velocities are metres per Julian year (365.25 x 86400 s).
+    This method does not transform between terrestrial reference frames or
+    account for nonlinear motion, earthquakes, or antenna phase centres.
+
+    All XYZ and VELXYZ values must belong to the *same point/solution* and
+    have a complete validity interval. If this cannot be verified, fail with
+    an informative exception rather than return partial station coordinates.
+    """
+    if isinstance(site_list, str):
+        site_list = [site_list]
+    site_list = list(site_list)
+    if not site_list:
+        raise ValueError('site_list must contain at least one station code')
+    instant = to_attoseconds(epoch)
+    display_epoch = at2pt(epoch)
 
     snx = Sinex(sinex_fn)
-    sdct = snx.solution_estimate(site_list, True)
-    """The entries of this dictionary are like:
-    {'index': 199, 'parameter_type': 'STAX', 'code': 'DIOA', 'point': 'A', 
-    'solution_id': 1, 'epoch': datetime.datetime(2000, 1, 1, 0, 0), 'unit': 'm', 
-    'constraint_code': '2', 'value': 4595215.2406169, 'std_dev': 0.00064014, 
-    'technique': 'D', 'start': datetime.datetime(1993, 1, 3, 0, 0), 
-    'stop': datetime.datetime(2006, 5, 16, 23, 59, 59)},
-    """
-
-    def get_site_crd(site, parameter_type, valid_at):
-        for entry in sdct:
-            if entry["code"] == site and entry["parameter_type"] == parameter_type:
-                if (to_attoseconds(entry["start"]) <= to_attoseconds(valid_at)
-                        <= to_attoseconds(entry["stop"])):
-                    return entry["value"], entry["epoch"], entry["solution_id"]
-        return None
-
+    # SOLUTION/EPOCHS supplies the validity and solution number. Estimate
+    # rows alone do not identify the complete time validity unambiguously.
+    entries = snx.solution_estimate(site_list, append_solution_epoch_info=True)
     result = {}
     for site in site_list:
-        result[site] = {}
-        for cmp in ["X", "Y", "Z"]:
-            try:
-                x0, t0, solnp = get_site_crd(site, "STA" + cmp, epoch)
-                vx, tv, solnv = get_site_crd(site, "VEL" + cmp, epoch)
-                assert solnp == solnv
-                # Treat VELX/VELY/VELZ as metres per Julian year (365.25 days).
-                # Preserve fractional days and subseconds in the propagation.
-                dt_years = (epoch_as - to_attoseconds(t0)) / (365.25 * 86400 * 10**18)
-                result[site][cmp] = x0 + vx * dt_years
-                if 'soln' in result[site]: 
-                    assert result[site]['soln'] == solnp
-                else:
-                    result[site]['soln'] = solnp
-            except (TypeError, ValueError, AssertionError) as exc:
-                raise LookupError(
-                    f"Incomplete or inconsistent SINEX {cmp} coordinate for {site} "
-                    f"at {calendar_epoch.isoformat(sep=' ')}"
-                ) from exc
+        valid = []
+        for entry in entries:
+            if entry['code'] != site:
+                continue
+            if 'start' not in entry or 'stop' not in entry:
+                raise LookupError(f'SINEX {site}: missing SOLUTION/EPOCHS interval')
+            if to_attoseconds(entry['start']) <= instant <= to_attoseconds(entry['stop']):
+                valid.append(entry)
+        if not valid:
+            raise LookupError(f'No valid SINEX coordinate solution for {site} at {display_epoch}')
 
-    # remove sites with no coordinates
-    result = {k: v for k, v in result.items() if v}
+        # Group by monument point and solution number; never accidentally
+        # combine the XYZ of one solution with velocities of another.
+        solutions = {}
+        for item in valid:
+            key = (item['point'], item['solution_id'])
+            parameters = solutions.setdefault(key, {})
+            name = item['parameter_type']
+            if name in parameters:
+                raise ValueError(f'Duplicate SINEX parameter {name} for {site}, solution {key}')
+            parameters[name] = item
+        if len(solutions) != 1:
+            raise LookupError(f'SINEX {site}: ambiguous overlapping point/solution records')
+        required = {'STA'+axis for axis in 'XYZ'} | {'VEL'+axis for axis in 'XYZ'}
+        matches = [(key, p) for key, p in solutions.items() if required <= p.keys()]
+        if len(matches) != 1:
+            raise LookupError(f'Expected one complete XYZ/velocity solution for {site} '
+                              f'at {display_epoch}, found {len(matches)}')
+        (point, soln), parameters = matches[0]
+        ref_epochs = {to_attoseconds(parameters['STA'+axis]['epoch']) for axis in 'XYZ'}
+        if len(ref_epochs) != 1:
+            raise ValueError(f'SINEX {site} XYZ components have different reference epochs')
+        years_since_ref = (instant - ref_epochs.pop()) / (365.25 * 86400 * 10**18)
+        coords = {}
+        for axis in 'XYZ':
+            position = parameters['STA'+axis]
+            velocity = parameters['VEL'+axis]
+            if position['unit'] != 'm' or velocity['unit'] != 'm/y':
+                raise ValueError(f'Unsupported SINEX coordinate/velocity units for {site} {axis}')
+            xyz = float(position['value']) + float(velocity['value']) * years_since_ref
+            if not np.isfinite(xyz):
+                raise ValueError(f'Non-finite propagated coordinate for {site} {axis}')
+            coords[axis] = xyz
+        coords['soln'] = soln
+        result[site] = coords
 
-    # append eccentricities if needed
     if apply_eccentricity:
-        edct = snx.eccentricity(site_list)
-
-        def get_site_eccentricity(site_id, valid_at):
-            for entry in edct:
-                if entry["code"] == site_id and (
-                    entry["start"] <= valid_at and entry["stop"] >= valid_at
-                ):
-                    return np.array([entry["east"], entry["north"], entry["up"]])
-            return None
-
+        eccentricities = snx.eccentricity(site_list)
         for site, crd in result.items():
-            denu = get_site_eccentricity(site, epoch)
-            if denu is None:
-                raise LookupError(f"No valid SITE/ECCENTRICITY data for {site} at {calendar_epoch}")
-            lat, lon, hgt = car2ell(crd["X"], crd["Y"], crd["Z"])
-            xyz = (
-                np.array([crd["X"], crd["Y"], crd["Z"]])
-                + geodetic2lvlh(lat, lon) @ denu
-            )
-            result[site]["X"] = xyz[0]
-            result[site]["Y"] = xyz[1]
-            result[site]["Z"] = xyz[2]
+            matches = [r for r in eccentricities if r['code'] == site
+                       and r['solution_id'] == crd['soln']
+                       and to_attoseconds(r['start']) <= instant <= to_attoseconds(r['stop'])]
+            if len(matches) != 1:
+                raise LookupError(f'Expected one valid SITE/ECCENTRICITY for {site}, '
+                                  f'found {len(matches)}')
+            entry = matches[0]
+            if entry['axe'] != 'UNE':
+                raise ValueError(f'Unsupported SINEX eccentricity axes {entry["axe"]!r} for {site}; need UNE')
+            # The SINEX eccentricity is specified as U,N,E (metres). The
+            # geodetic2lvlh matrix has E,N,U columns, so reorder explicitly.
+            local_enu = np.array([entry['east'], entry['north'], entry['up']])
+            lat, lon, _ = car2ell(crd['X'], crd['Y'], crd['Z'])
+            vec = np.array([crd['X'], crd['Y'], crd['Z']]) + geodetic2lvlh(lat, lon) @ local_enu
+            crd.update(zip('XYZ', vec.tolist()))
 
     if dpod_freq_corr_fn:
-        frq = dpod_freq_corr(dpod_freq_corr_fn, site_list)
+        corrections = dpod_freq_corr(dpod_freq_corr_fn, site_list)
+        # This optional DORIS deformation model is not used in the GNSS
+        # tutorial; retain its old interface with corrected fractional-DOY.
+        from dsoclasses.time.calmjd import cal2fmjd
+        fmjd = cal2fmjd(display_epoch)
+        fdoy = display_epoch.timetuple().tm_yday + (fmjd - math.floor(fmjd))
         for site, crd in result.items():
-            if site in frq:
-                for entry in frq[site]:
-                    if int(entry['soln']) == int(crd['soln']):
-                        freq = entry['freq']
-                        doy = int(calendar_epoch.strftime('%j'))
-                        fmjd = cal2fmjd(calendar_epoch)
-                        fdoy = doy + (int(fmjd)-fmjd)
-                        result[site]["X"] += (np.cos(2.*np.pi*fdoy/freq)*entry['xyz']['xcos']  + np.sin(2.*np.pi*fdoy/freq)*entry['xyz']['xsin'])*1e-3 
-                        result[site]["Y"] += (np.cos(2.*np.pi*fdoy/freq)*entry['xyz']['ycos']  + np.sin(2.*np.pi*fdoy/freq)*entry['xyz']['ysin'])*1e-3 
-                        result[site]["Z"] += (np.cos(2.*np.pi*fdoy/freq)*entry['xyz']['zcos']  + np.sin(2.*np.pi*fdoy/freq)*entry['xyz']['zsin'])*1e-3 
-                    # else:
-                    #     print(f'no match, will not apply frequency {entry["freq"]}')
-            else:
-                print(f'Note: Failed finding {site} in dpod frequency corrections file! No corrections applied.')
-
+            for item in corrections.get(site, ()):
+                if int(item['soln']) != int(crd['soln']):
+                    continue
+                w = 2 * math.pi * fdoy / item['freq']
+                for axis in 'XYZ':
+                    k = axis.lower()
+                    crd[axis] += (math.cos(w) * item['xyz'][k+'cos']
+                                  + math.sin(w) * item['xyz'][k+'sin']) * 1e-3
     return result

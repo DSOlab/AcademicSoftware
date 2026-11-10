@@ -11,6 +11,7 @@ from dsoclasses.time.calmjd import cal2fmjd, mjd2cal
 from dsoclasses.time.pyattotime import to_attoseconds
 import datetime
 import math
+import warnings
 from pathlib import Path
 from typing import Tuple, Dict
 import numpy as np
@@ -30,6 +31,12 @@ class SiteVmf3:
         self._fn = str(filename)
         self._site_list = set(site_list or [])
         records = {}
+        # A small number of records in genuine site-wise VMF3 products have
+        # nonpositive wet mapping coefficients (a_w).  Such a coefficient is
+        # not usable by the VMF3 mapping function, but one bad six-hour record
+        # must not make an otherwise valid annual file impossible to open.
+        # Remember these records so we can tell the caller what was skipped.
+        invalid_aw = []
         with open(filename, encoding='ascii', errors='replace') as stream:
             for line_no, line in enumerate(stream, start=1):
                 if not line.strip() or line.lstrip().startswith('#'):
@@ -47,10 +54,36 @@ class SiteVmf3:
                     raise ValueError(f'Invalid VMF3 values at line {line_no}') from exc
                 if not np.all(np.isfinite(values)):
                     raise ValueError(f'Non-finite VMF3 values at line {line_no}')
+                ah, aw, zhd, zwd, pressure, temperature, vapour = values
+                # Negative temperatures (degrees Celsius) are entirely valid.
+                # The other quantities must satisfy their physical sign
+                # constraints.  A negative ZHD or pressure suggests damaged
+                # input and should not be quietly hidden by the reader.
+                if min(ah, zhd, pressure) <= 0 or zwd < 0 or vapour < 0:
+                    raise ValueError(f'Unphysical VMF3 fields at line {line_no}')
+                if aw <= 0:
+                    # Real VMF3 site products occasionally include anomalous
+                    # negative a_w values.  They cannot safely be used in the
+                    # mapping function.  Skip the *whole* station/epoch record
+                    # instead of changing a_w, substituting another site's
+                    # data, or losing the entire annual dataset.
+                    invalid_aw.append((line_no, name, epoch, aw))
+                    continue
                 slot = records.setdefault(epoch, {})
                 if name in slot:
                     raise ValueError(f'Duplicate VMF3 data for {name} at {epoch}')
                 slot[name] = dict(zip(_SITE_FIELDS, values))
+        if invalid_aw:
+            first_line, first_site, first_epoch, first_aw = invalid_aw[0]
+            warnings.warn(
+                f'Skipped {len(invalid_aw)} VMF3 record(s) with nonpositive '
+                f'wet mapping coefficient a_w in {filename}; first: '
+                f'{first_site} at {first_epoch} (line {first_line}, '
+                f'a_w={first_aw:g}). Interpolation across missing six-hour '
+                f'records is not permitted.',
+                RuntimeWarning,
+                stacklevel=2,
+            )
         if not records:
             if self._site_list:
                 raise LookupError(f'VMF3 stations not present in file: {sorted(self._site_list)}')
@@ -88,6 +121,11 @@ class SiteVmf3:
             raise LookupError(f'Missing VMF3 data for site {site!r} at a bracketing epoch') from exc
         if before == after:
             return d0.copy()
+        # Site VMF3 products are normally six-hourly. Do not interpolate
+        # silently across missing days, which would fabricate atmospheric
+        # conditions unrelated to the observation epoch.
+        if to_attoseconds(after) - to_attoseconds(before) > 6 * 3600 * 10**18 + 10**12:
+            raise ValueError(f'VMF3 gap for {site!r} exceeds six hours')
         # Compare attodatetime to datetime without mixing concrete types.
         alpha = ((to_attoseconds(t) - to_attoseconds(before))
                  / (to_attoseconds(after) - to_attoseconds(before)))
@@ -99,7 +137,11 @@ class SiteVmf3:
 
     def vmf3(self, site_name, site_lat, site_lon, el, t):
         """Return interpolated site data plus hydrostatic/wet mapping factors."""
-        if not math.isfinite(float(el)) or not (0 < el <= math.pi / 2):
+        if not all(math.isfinite(float(v)) for v in (site_lat, site_lon, el)):
+            raise ValueError('VMF3 latitude, longitude and elevation must be finite')
+        if not -math.pi/2 <= site_lat <= math.pi/2:
+            raise ValueError('VMF3 latitude must be in -90..90 degrees')
+        if not (0 < el <= math.pi / 2):
             raise ValueError('VMF3 requires elevation 0 < el <= pi/2 radians')
         fields = self.interpolate_site(site_name, t)
         fields['mfh'], fields['mfw'] = vmf3(
@@ -232,6 +274,12 @@ def vmf3(
     mfh, mfw : floats
         Hydrostatic and wet mapping functions.
     """
+    if not all(math.isfinite(float(v)) for v in (ah, aw, mjd, lat, lon, zd)):
+        raise ValueError('VMF3 inputs must be finite')
+    if not -math.pi/2 <= lat <= math.pi/2:
+        raise ValueError('VMF3 latitude must be in -90..90 degrees')
+    if ah <= 0 or aw <= 0 or not 0 <= zd < math.pi/2:
+        raise ValueError('VMF3 requires positive a coefficients and above-horizon geometry')
     coeffs = _load_coeffs(coeffs_path)
     # Geometry
     el = 0.5 * math.pi - zd
@@ -293,4 +341,6 @@ def vmf3(
     mfh = (1.0 + ah / (1.0 + bh / (1.0 + ch))) / (s + ah / (s + bh / (s + ch)))
     # wet
     mfw = (1.0 + aw / (1.0 + bw / (1.0 + cw))) / (s + aw / (s + bw / (s + cw)))
+    if not math.isfinite(float(mfh)) or not math.isfinite(float(mfw)) or min(mfh, mfw) < 1 - 1e-12:
+        raise ValueError('VMF3 returned nonphysical mapping factors')
     return mfh, mfw

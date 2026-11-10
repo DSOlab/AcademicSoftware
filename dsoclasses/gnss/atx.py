@@ -14,11 +14,12 @@ import numpy as np
 # ANTEX frequency identifiers differ from PRNs. In particular GPS L5 is G05.
 _ATX_FREQS = {
     'G': {'L1': 'G01', 'L2': 'G02', 'L5': 'G05'},
-    'R': {'G1': 'R01', 'G2': 'R02', 'L1': 'R01', 'L2': 'R02'},
+    'R': {'G1': 'R01', 'G2': 'R02', 'G3': 'R03', 'L1': 'R01', 'L2': 'R02'},
     'E': {'E1': 'E01', 'E5a': 'E05', 'E5b': 'E07', 'E5(E5a+E5b)': 'E08', 'E6': 'E06'},
-    'C': {'E1': 'C01', 'E2': 'C02', 'E5b': 'C07', 'E6': 'C06'},
+    'C': {'B1C': 'C01', 'B1I': 'C02', 'B2a': 'C05', 'B2b': 'C07', 'B3I': 'C06', 'E1': 'C01', 'E2': 'C02', 'E5b': 'C07', 'E6': 'C06'},
     'J': {'L1': 'J01', 'L2': 'J02', 'L5': 'J05', 'LEX': 'J06'},
     'S': {'L1': 'S01', 'L5': 'S05'},
+    'I': {'L5': 'I05', 'S': 'I09'},
 }
 
 
@@ -45,11 +46,13 @@ class ReceiverAntennaPcv:
         z1, z2, dz = angles
         if not np.all(np.isfinite(offset)) or not np.all(np.isfinite(variation)):
             raise ValueError(f'Non-finite antenna calibration for {freq}')
-        if dz <= 0 or z2 < z1 or not np.all(np.isfinite(angles)):
+        if dz <= 0 or z2 < z1 or z1 < 0 or z2 > 90 or not np.all(np.isfinite(angles)):
             raise ValueError(f'Invalid zenith-angle grid for {freq}')
         expected = int(round((z2 - z1) / dz)) + 1
         if expected != len(variation) or not np.isclose(z1 + (expected - 1) * dz, z2):
             raise ValueError(f'Wrong NOAZI sample count for {freq}: expected {expected}, got {len(variation)}')
+        if freq in self.pcv:
+            raise ValueError(f'Duplicate ANTEX calibration for {freq}')
         self.pcv[freq] = {'neu': offset, 'z1z2dz': angles, 'pcv': variation}
 
     @staticmethod
@@ -86,6 +89,30 @@ class ReceiverAntennaPcv:
             raise ValueError(f'Elevation outside ANTEX coverage for {freq} (zenith {z1}..{z2} deg)')
         knots = z1 + np.arange(len(record['pcv'])) * dz
         return float(np.interp(np.clip(za, z1, z2), knots, record['pcv']))
+
+
+    def range_correction_m(self, freq, azimuth, elevation):
+        """Receiver antenna correction from phase centre to ARP [metres].
+
+        ``azimuth`` is clockwise from north, ``elevation`` above horizon;
+        both are in radians. The receiver PCO vector is ANTEX North/East/Up.
+        Projecting onto the receiver-to-satellite line of sight gives the
+        geometrical difference between distances measured at the ARP and
+        at the frequency-dependent antenna phase centre.
+
+        The returned ``dot(PCO, LOS) + PCV`` follows the sign convention used
+        by the course pseudorange notebook: add it to a measured code range
+        to refer that range to the antenna reference point (ARP). It does
+        NOT include satellite-antenna offsets, nor azimuth-dependent PCV.
+        """
+        if not all(math.isfinite(float(x)) for x in (azimuth, elevation)):
+            raise ValueError('Azimuth and elevation must be finite radians')
+        if not 0 <= elevation <= math.pi/2:
+            raise ValueError('Antenna correction requires elevation in 0..90 degrees')
+        neu_los = np.array([math.cos(elevation) * math.cos(azimuth),
+                            math.cos(elevation) * math.sin(azimuth),
+                            math.sin(elevation)])
+        return float(np.dot(self.pco(freq), neu_los) + self.pcv_hgt(freq, elevation))
 
 
 class Atx:

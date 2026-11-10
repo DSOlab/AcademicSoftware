@@ -1,5 +1,6 @@
 import numpy as np
 import datetime
+import math
 
 # mean gravity in m/s**2
 gm = 9.80665e0
@@ -16,8 +17,13 @@ def saastamoinen_zhd(lat, h, p):
         Returns:
         ZHD in [m]
     """
-    h *= 1e-3 
-    return 22768e-7 * p / (1. - 266e-5 * np.cos(2.*lat) - 28e-5*h)
+    if not all(math.isfinite(float(q)) for q in (lat, h, p)):
+        raise ValueError('ZHD requires finite latitude, height, and pressure')
+    if not -math.pi/2 <= lat <= math.pi/2 or p <= 0:
+        raise ValueError('ZHD requires physical latitude and positive pressure [hPa]')
+    # Saastamoinen denominator uses station height in kilometres.
+    h_km = h * 1e-3
+    return 0.0022768 * p / (1. - 0.00266 * np.cos(2.*lat) - 0.00028*h_km)
 
 def askne_zwd(e, Tm, wvlr):
     """ Input parameters:
@@ -27,6 +33,10 @@ def askne_zwd(e, Tm, wvlr):
         Returns:
         ZWD in [m]
     """
+    if not all(math.isfinite(float(q)) for q in (e, Tm, wvlr)):
+        raise ValueError('ZWD requires finite vapour pressure, temperature, and lambda')
+    if e < 0 or Tm <= 0 or wvlr <= -1:
+        raise ValueError('ZWD requires e >= 0 hPa, Tm > 0 K and lambda > -1')
     k1  = 77.604
     k2 = 64.79
     k2p = k2 - k1*18.0152/28.9644
@@ -39,7 +49,14 @@ def askne_zwd(e, Tm, wvlr):
 def parse_gpt3_line(line):
     data_keys = ['lat', 'lon', 'p:', 'T:', 'Q:', 'dT:', 'undu', 'Hs', 'a_h:', 'a_w:', 'lambda:', 'Tm:', 'Gn_h:', 'Ge_h:', 'Gn_w:', 'Ge_w:']
     key_coeffs = ['a0', 'A1', 'B1', 'A2', 'B2']
-    data = [float(x) for x in line.split()]
+    values = line.split()
+    if len(values) != 64:
+        raise ValueError(f'GPT3 5-degree grid row must contain 64 values; got {len(values)}')
+    data = [float(x) for x in values]
+    if not all(math.isfinite(x) for x in data):
+        raise ValueError('GPT3 grid row contains non-finite coefficients')
+    if not (-87.5 <= data[0] <= 87.5) or not (-180 <= data[1] < 360):
+        raise ValueError('Invalid GPT3 grid latitude/longitude')
     idx = 0
     dct = {}
     for key in data_keys:
@@ -198,6 +215,10 @@ def gpt3(t, lon, lat, hgt, grid):
     may be datetime or attotime; no datetime-type-specific subtraction is
     necessary to compute the fractional day-of-year.
     """
+    if not all(math.isfinite(float(q)) for q in (lon, lat, hgt)):
+        raise ValueError('GPT3 requires finite longitude, latitude, and height')
+    if not -math.pi/2 <= lat <= math.pi/2:
+        raise ValueError('GPT3 latitude outside -90..90 degrees')
     tld, trd, bld, brd = get_grid_nodes(lon, lat, grid)
     # Use the same epoch normalization as the orbit and RINEX modules.
     # MJD and day-of-year are calendar quantities; no implicit GPS/UTC
@@ -206,4 +227,9 @@ def gpt3(t, lon, lat, hgt, grid):
     from dsoclasses.time.pyattotime import at2pt
     _, seconds_of_day = cal2mjd(t)
     doy = at2pt(t).timetuple().tm_yday + seconds_of_day / 86400.0
-    return bilinear_interpolation(doy, lat, lon, hgt, tld, trd, bld, brd)
+    result = bilinear_interpolation(doy, lat, lon, hgt, tld, trd, bld, brd)
+    if not all(math.isfinite(float(v)) for v in result.values()):
+        raise ValueError('GPT3 generated non-finite atmospheric parameters')
+    if result['p'] <= 0 or result['e'] < 0 or result['Tm'] <= 0:
+        raise ValueError('GPT3 produced nonphysical pressure/temperature')
+    return result
