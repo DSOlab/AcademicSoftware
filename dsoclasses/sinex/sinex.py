@@ -1,11 +1,11 @@
 import datetime
-import attotime
 import sys
 import math
 import numpy as np
 from dsoclasses.geodesy.transformations import geodetic2lvlh, car2ell
 from dsoclasses.sinex.dpod import dpod_freq_corr
 from dsoclasses.time.calmjd import cal2fmjd
+from dsoclasses.time.pyattotime import to_attoseconds, at2pt
 
 
 def parse_sinex_date(dstr):
@@ -70,6 +70,8 @@ class Sinex:
             self.goto_block(fin, "SITE/ID")
             line = fin.readline()
             while line.strip() != "-SITE/ID":
+                if not line or line.strip() == "%ENDSNX":
+                    raise ValueError("Truncated SINEX block SITE/ID: missing -SITE/ID")
                 dct = {}
                 if line[0] != "*":
                     dct["code"] = line[0:5].strip()
@@ -107,6 +109,8 @@ class Sinex:
             self.goto_block(fin, "SOLUTION/EPOCHS")
             line = fin.readline()
             while line.strip() != "-SOLUTION/EPOCHS":
+                if not line or line.strip() == "%ENDSNX":
+                    raise ValueError("Truncated SINEX block SOLUTION/EPOCHS: missing -SOLUTION/EPOCHS")
                 dct = {}
                 if line[0] != "*":
                     dct["code"] = line[0:5].strip()
@@ -128,6 +132,8 @@ class Sinex:
             self.goto_block(fin, "SITE/ECCENTRICITY")
             line = fin.readline()
             while line.strip() != "-SITE/ECCENTRICITY":
+                if not line or line.strip() == "%ENDSNX":
+                    raise ValueError("Truncated SINEX block SITE/ECCENTRICITY: missing -SITE/ECCENTRICITY")
                 dct = {}
                 if line[0] != "*":
                     dct["code"] = line[0:5].strip()
@@ -150,6 +156,8 @@ class Sinex:
             self.goto_block(fin, "SOLUTION/ESTIMATE")
             line = fin.readline()
             while line.strip() != "-SOLUTION/ESTIMATE":
+                if not line or line.strip() == "%ENDSNX":
+                    raise ValueError("Truncated SINEX block SOLUTION/ESTIMATE: missing -SOLUTION/ESTIMATE")
                 dct = {}
                 if line[0] != "*":
                     dct["index"] = int(line[0:6].strip())
@@ -209,9 +217,12 @@ class Sinex:
 
 
 def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=False, dpod_freq_corr_fn=None):
-    # if epoch is an attotime, we must convert it to a native datetime instance
-    if isinstance(epoch, attotime.attodatetime):
-        epoch = datetime.datetime(*epoch.timetuple()[:6])
+    # All comparison and extrapolation arithmetic uses the shared integer
+    # attosecond convention.  In particular, do not truncate an attodatetime
+    # to whole seconds or use datetime.timedelta.days (which discards hours).
+    epoch_as = to_attoseconds(epoch)
+    # A native datetime is only needed by optional calendar-output routines.
+    calendar_epoch = epoch if isinstance(epoch, datetime.datetime) else at2pt(epoch)
 
     snx = Sinex(sinex_fn)
     sdct = snx.solution_estimate(site_list, True)
@@ -226,7 +237,8 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
     def get_site_crd(site, parameter_type, valid_at):
         for entry in sdct:
             if entry["code"] == site and entry["parameter_type"] == parameter_type:
-                if entry["start"] <= valid_at and entry["stop"] >= valid_at:
+                if (to_attoseconds(entry["start"]) <= to_attoseconds(valid_at)
+                        <= to_attoseconds(entry["stop"])):
                     return entry["value"], entry["epoch"], entry["solution_id"]
         return None
 
@@ -238,16 +250,20 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
                 x0, t0, solnp = get_site_crd(site, "STA" + cmp, epoch)
                 vx, tv, solnv = get_site_crd(site, "VEL" + cmp, epoch)
                 assert solnp == solnv
-                dt_years = (epoch - t0).days / 365.25
+                # Treat VELX/VELY/VELZ as metres per Julian year (365.25 days).
+                # Preserve fractional days and subseconds in the propagation.
+                dt_years = (epoch_as - to_attoseconds(t0)) / (365.25 * 86400 * 10**18)
                 result[site][cmp] = x0 + vx * dt_years
                 if 'soln' in result[site]: 
                     assert result[site]['soln'] == solnp
                 else:
                     result[site]['soln'] = solnp
-            except:
-                print(
-                    f"Warning! Failed finding valid coordinates ({cmp}) for site {site} at {epoch.strftime("%Y-%m-%d %H:%M:%S")}"
-                )
+            except (TypeError, ValueError, AssertionError) as exc:
+                raise LookupError(
+                    f"Incomplete or inconsistent SINEX {cmp} coordinate for {site} "
+                    f"at {calendar_epoch.isoformat(sep=' ')}"
+                ) from exc
+
     # remove sites with no coordinates
     result = {k: v for k, v in result.items() if v}
 
@@ -265,6 +281,8 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
 
         for site, crd in result.items():
             denu = get_site_eccentricity(site, epoch)
+            if denu is None:
+                raise LookupError(f"No valid SITE/ECCENTRICITY data for {site} at {calendar_epoch}")
             lat, lon, hgt = car2ell(crd["X"], crd["Y"], crd["Z"])
             xyz = (
                 np.array([crd["X"], crd["Y"], crd["Z"]])
@@ -281,8 +299,8 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
                 for entry in frq[site]:
                     if int(entry['soln']) == int(crd['soln']):
                         freq = entry['freq']
-                        doy = int(epoch.strftime('%j'))
-                        fmjd = cal2fmjd(epoch)
+                        doy = int(calendar_epoch.strftime('%j'))
+                        fmjd = cal2fmjd(calendar_epoch)
                         fdoy = doy + (int(fmjd)-fmjd)
                         result[site]["X"] += (np.cos(2.*np.pi*fdoy/freq)*entry['xyz']['xcos']  + np.sin(2.*np.pi*fdoy/freq)*entry['xyz']['xsin'])*1e-3 
                         result[site]["Y"] += (np.cos(2.*np.pi*fdoy/freq)*entry['xyz']['ycos']  + np.sin(2.*np.pi*fdoy/freq)*entry['xyz']['ysin'])*1e-3 
