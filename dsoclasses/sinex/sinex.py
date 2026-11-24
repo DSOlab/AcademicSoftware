@@ -232,7 +232,8 @@ class Sinex:
         return sta_list_out_extra
 
 
-def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=False, dpod_freq_corr_fn=None):
+def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=False,
+                              dpod_freq_corr_fn=None, *, extrapolate_after_last=False):
     """Propagate SINEX station coordinates to ``epoch`` using station velocity.
 
     Arguments
@@ -242,10 +243,15 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
     epoch: datetime, attodatetime or other supported precise epoch label.
     apply_eccentricity: if true, add station SITE/ECCENTRICITY to XYZ.
     dpod_freq_corr_fn: optional DORIS periodic-displacement table.
+    extrapolate_after_last: if true, continue the **last** solution's linear
+        position/velocity model beyond its final observation epoch. This is
+        useful for ITRF2020 coordinates evaluated in 2024. It does *not*
+        extrapolate before the first interval or across internal gaps.
 
     Returns
     -------
-    ``{site: {'X': m, 'Y': m, 'Z': m, 'soln': solution_id}}``.
+    ``{site: {'X': m, 'Y': m, 'Z': m, 'soln': solution_id,
+              'extrapolated_after_last': bool}}``.
 
     Important conventions
     ---------------------
@@ -273,13 +279,22 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
     result = {}
     for site in site_list:
         valid = []
-        for entry in entries:
-            if entry['code'] != site:
-                continue
+        site_entries = [entry for entry in entries if entry['code'] == site]
+        for entry in site_entries:
             if 'start' not in entry or 'stop' not in entry:
                 raise LookupError(f'SINEX {site}: missing SOLUTION/EPOCHS interval')
             if to_attoseconds(entry['start']) <= instant <= to_attoseconds(entry['stop']):
                 valid.append(entry)
+        extrapolated = False
+        if not valid and extrapolate_after_last and site_entries:
+            last_stop = max(to_attoseconds(entry['stop']) for entry in site_entries)
+            if instant > last_stop:
+                # A station can have several historical coordinate segments
+                # due to a discontinuity. Only the final segment is eligible
+                # for forward extrapolation, never an arbitrary older segment.
+                valid = [entry for entry in site_entries
+                         if to_attoseconds(entry['stop']) == last_stop]
+                extrapolated = True
         if not valid:
             raise LookupError(f'No valid SINEX coordinate solution for {site} at {display_epoch}')
 
@@ -316,6 +331,7 @@ def extract_sinex_coordinates(sinex_fn, site_list, epoch, apply_eccentricity=Fal
                 raise ValueError(f'Non-finite propagated coordinate for {site} {axis}')
             coords[axis] = xyz
         coords['soln'] = soln
+        coords['extrapolated_after_last'] = extrapolated
         result[site] = coords
 
     if apply_eccentricity:

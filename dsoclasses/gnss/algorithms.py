@@ -107,7 +107,8 @@ def satellite_velocity(epoch, interpolator, sat, step_seconds=0.5) -> tuple[np.n
     return (right - left) / (2.0 * step_seconds), position
 
 
-def relativistic_range_term(epoch, interpolator, sat, step_seconds=0.5) -> float:
+def relativistic_range_term(epoch, interpolator, sat, step_seconds=0.5, *,
+                            travel_time_s=0.0) -> float:
     """Relativistic eccentricity term in metres, 2*(r dot v)/c.
 
     **Sign convention:** This is the term moved to the *computed* side of
@@ -117,7 +118,15 @@ def relativistic_range_term(epoch, interpolator, sat, step_seconds=0.5) -> float
     WARNING: Before enabling this term with a particular precise clock
     product, verify whether its clock convention *already* includes the
     relativistic effect. Double-applying the correction biases pseudoranges.
+
+    With ``travel_time_s`` supplied, ``epoch`` is a reception-time label;
+    the required emission-time shift is handled here, rather than in the
+    course notebook.
     """
+    if not math.isfinite(float(travel_time_s)) or travel_time_s < 0:
+        raise ValueError('travel_time_s must be finite and nonnegative')
+    if travel_time_s:
+        epoch = shift_epoch_seconds(epoch, -travel_time_s)
     velocity, position = satellite_velocity(epoch, interpolator, sat, step_seconds)
     return float(2.0 * np.dot(position, velocity) / gs.C)
 

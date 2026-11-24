@@ -7,9 +7,12 @@ radians. The helper handles NOAZI (azimuth-independent) patterns only.
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
+
+from dsoclasses.time.pyattotime import to_attoseconds, shift_epoch_seconds
 
 # ANTEX frequency identifiers differ from PRNs. In particular GPS L5 is G05.
 _ATX_FREQS = {
@@ -116,9 +119,10 @@ class ReceiverAntennaPcv:
 
 
 class Atx:
-    """Read receiver NOAZI calibration blocks from an ANTEX file."""
+    """Read receiver NOAZI and GNSS satellite antenna PCOs from ANTEX."""
     def __init__(self, filename):
         self.filename = str(Path(filename))
+        self._satellite_pcos = None
         with open(self.filename, encoding='ascii', errors='replace') as stream:
             first = stream.readline()
             if first[60:80].strip() != 'ANTEX VERSION / SYST':
@@ -269,3 +273,134 @@ class Atx:
         else:
             raise TypeError('freq_list must be a string, sequence or constellation map')
         return self._get_noazi(antenna, freqs)
+
+    @staticmethod
+    def _validity_epoch(line):
+        """ANTEX VALID FROM/UNTIL calendar date, to Python datetime."""
+        fields = line[:60].split()
+        if len(fields) != 6:
+            raise ValueError(f'Malformed ANTEX validity epoch: {line.rstrip()!r}')
+        year, month, day, hour, minute = map(int, fields[:5])
+        second = float(fields[5])
+        if not 0 <= second < 60 or not math.isfinite(second):
+            raise ValueError('Invalid seconds in ANTEX validity epoch')
+        return datetime(year, month, day, hour, minute) + timedelta(seconds=second)
+
+    def _read_satellite_pcos(self):
+        """Read antenna blocks indexed by RINEX PRN, validity and frequency.
+
+        In ANTEX 1.4 satellite PCO fields are body-frame X/Y/Z, in mm,
+        with the satellite centre of mass as origin.  Unlike receiver PCOs
+        they are NOT local North/East/Up vectors, despite the record label.
+        """
+        records = {}
+        with open(self.filename, encoding='ascii', errors='replace') as stream:
+            inside = False
+            prn = None
+            start = stop = None
+            active_frequency = None
+            offsets = {}
+            for line in stream:
+                label = line[60:80].strip()
+                if label == 'START OF ANTENNA':
+                    if inside:
+                        raise ValueError('Nested ANTEX START OF ANTENNA')
+                    inside, prn = True, None
+                    start = stop = None
+                    offsets = {}
+                    active_frequency = None
+                elif not inside:
+                    continue
+                elif label == 'TYPE / SERIAL NO':
+                    # Satellite blocks put their PRN (G21, E11, R03, ...)
+                    # in the second 20-character field; receiver blocks do
+                    # not and are ignored here.
+                    tokens = line[20:40].split()
+                    prn = next((token for token in tokens if len(token) == 3
+                                and token[0] in 'GRECJIS' and token[1:].isdigit()), None)
+                elif label == 'VALID FROM':
+                    start = self._validity_epoch(line)
+                elif label == 'VALID UNTIL':
+                    stop = self._validity_epoch(line)
+                elif label == 'START OF FREQUENCY':
+                    if active_frequency is not None:
+                        raise ValueError('Nested ANTEX frequency block')
+                    active_frequency = line[3:6].strip()
+                elif label == 'NORTH / EAST / UP' and prn and active_frequency:
+                    xyz = np.array([float(line[i:i + 10]) * 1e-3
+                                    for i in (0, 10, 20)], dtype=float)
+                    if not np.all(np.isfinite(xyz)):
+                        raise ValueError(f'Non-finite satellite PCO for {prn}')
+                    if active_frequency in offsets:
+                        raise ValueError(f'Duplicate PCO for {prn} {active_frequency}')
+                    offsets[active_frequency] = xyz
+                elif label == 'END OF FREQUENCY':
+                    active_frequency = None
+                elif label == 'END OF ANTENNA':
+                    if active_frequency is not None:
+                        raise ValueError('Unterminated ANTEX satellite frequency')
+                    if prn:
+                        if start is not None and stop is not None and start >= stop:
+                            raise ValueError(f'Invalid ANTEX interval for {prn}')
+                        for freq, xyz in offsets.items():
+                            records.setdefault((prn, freq), []).append((start, stop, xyz))
+                    inside = False
+            if inside:
+                raise ValueError('Unterminated ANTEX antenna block')
+        return records
+
+    def satellite_pco(self, satellite, frequency, epoch):
+        """Return satellite CoM-to-APC vector in body-fixed XYZ [metres].
+
+        ``frequency`` is an ANTEX ID such as G01, E05 or R02.  The caller
+        must supply the spacecraft attitude (or explicitly approximate it).
+        This method never confuses satellite body XYZ with ECEF XYZ.
+        """
+        if self._satellite_pcos is None:
+            self._satellite_pcos = self._read_satellite_pcos()
+        key = (str(satellite).upper(), str(frequency).upper())
+        query = to_attoseconds(epoch)
+        matches = [(a, b, vec) for a, b, vec in self._satellite_pcos.get(key, ())
+                   if (a is None or query >= to_attoseconds(a))
+                   and (b is None or query < to_attoseconds(b))]
+        if not matches:
+            raise LookupError(f'No satellite PCO for {key} at {epoch}')
+        if len(matches) != 1:
+            raise ValueError(f'Overlapping ANTEX satellite PCO validity for {key}')
+        return matches[0][2].copy()
+
+    def satellite_nadir_range_correction_m(self, satellite, frequency, epoch,
+                                           satellite_xyz, receiver_xyz, *,
+                                           travel_time_s=0.0):
+        """Approximate satellite antenna correction [m], *nadir pointing*.
+
+        Body +Z is assumed to point toward the geocentre.  The body X/Y PCO
+        components and satellite PCVs are deliberately omitted: they require
+        attitude/nadir-angle modeling outside this course's scope.
+
+        Return the amount to ADD to the observed code range when using a
+        satellite CoM SP3 position in the geometric model. If ``epoch`` is
+        the reception label, supply ``travel_time_s`` to perform the precise
+        reception-to-transmission epoch shift inside this GNSS interface.
+        """
+        satellite_xyz = np.asarray(satellite_xyz, dtype=float)
+        receiver_xyz = np.asarray(receiver_xyz, dtype=float)
+        if (satellite_xyz.shape != (3,) or receiver_xyz.shape != (3,)
+                or not np.all(np.isfinite(satellite_xyz))
+                or not np.all(np.isfinite(receiver_xyz))):
+            raise ValueError('Satellite and receiver must be finite ECEF XYZ [m]')
+        radial_norm = float(np.linalg.norm(satellite_xyz))
+        rho = float(np.linalg.norm(satellite_xyz - receiver_xyz))
+        if radial_norm == 0 or rho == 0:
+            raise ValueError('Invalid satellite/receiver geometry')
+        if not math.isfinite(float(travel_time_s)) or travel_time_s < 0:
+            raise ValueError('travel_time_s must be finite and nonnegative')
+        antenna_epoch = (shift_epoch_seconds(epoch, -travel_time_s)
+                         if travel_time_s else epoch)
+        body_pco = self.satellite_pco(satellite, frequency, antenna_epoch)
+        if not np.all(np.isfinite(body_pco)):
+            raise ValueError('Non-finite satellite antenna PCO')
+        # Satellite APC = CoM - PCO_z * outward radial unit vector.
+        outward = satellite_xyz / radial_norm
+        rec_to_sat = (satellite_xyz - receiver_xyz) / rho
+        return float(body_pco[2] * np.dot(outward, rec_to_sat))

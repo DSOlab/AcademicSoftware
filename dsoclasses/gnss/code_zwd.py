@@ -11,6 +11,11 @@ Model (metres)::
                             + receiver_clock_range + ZHD*m_h + ZWD*m_w
                             + relativity_range + sagnac_range
 
+The optional ``station_displacement_m`` vector in each observation moves
+the reference marker XYZ to the epoch's antenna reference point, including
+antenna eccentricity and any externally calculated solid-Earth-tide motion.
+When absent it defaults to zero for older notebooks.
+
 The notebook prepares the code bias, antenna and atmospheric metadata. The
 solver estimates a receiver-clock range for every kept epoch and a piecewise
 linear ZWD through user-provided time knots.
@@ -103,7 +108,15 @@ def solve_code_zwd(raw_obs, approx_xyz, n_epochs, *, sigma0=5.0,
             sat = np.asarray(obs['rsat'], dtype=float)
             if sat.shape != (3,) or not np.all(np.isfinite(sat)):
                 raise ValueError(f'Observation {i}: invalid satellite XYZ')
-            diff = parameters[:3] - sat
+            # RINEX approximate/estimated coordinates refer to the ground
+            # marker.  The actual receiver antenna reference point may be
+            # displaced from that marker (RINEX H/E/N), and the ground itself
+            # moves due to solid Earth tides.  Both are known ECEF offsets.
+            # Legacy teaching observations without the field mean zero.
+            offset = np.asarray(obs.get('station_displacement_m', (0., 0., 0.)), dtype=float)
+            if offset.shape != (3,) or not np.all(np.isfinite(offset)):
+                raise ValueError(f'Observation {i}: invalid station displacement')
+            diff = parameters[:3] + offset - sat
             distance = float(np.linalg.norm(diff))
             if distance <= 0 or not math.isfinite(distance):
                 raise ValueError(f'Observation {i}: invalid geometric range')

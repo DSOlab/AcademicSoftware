@@ -13,7 +13,7 @@ authors = [
 ]
 description = "."
 readme = "README.md"
-requires-python = ">=3"
+requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -23,7 +23,9 @@ dependencies = [
   'numpy',
   'scipy',
   'cartopy',
-  'attotime'
+  'attotime',
+  'astropy>=6',
+  'pyTMD>=3.0,<4'
 ]
 
 [project.urls]
